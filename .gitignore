@@ -214,3 +214,4 @@ docker/.env
 .vscode/
 logs/
 .github/workflows/check-linting-on-pr.yml
+.github/workflows/
