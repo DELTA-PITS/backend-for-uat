@@ -1,0 +1,88 @@
+name: trustmark
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trustmark}
+      POSTGRES_USER: ${POSTGRES_USER:-trustmark}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trustmark}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-trustmark} -d ${POSTGRES_DB:-trustmark}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.2
+    volumes:
+      - ./realms/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      - DB_VENDOR=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-trustmark}
+      - KC_DB=postgres
+      - KC_DB_USERNAME=${POSTGRES_USER:-trustmark}
+      - KC_DB_PASSWORD=${POSTGRES_PASSWORD:-trustmark}
+      - KC_BOOTSTRAP_ADMIN_USERNAME=${KEYCLOAK_USER}
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_PASS}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil"]
+    command: ["--host", "0.0.0.0", "--port", "8545"]
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test:
+        ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  trustmark-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      anvil:
+        condition: service_healthy
+    environment:
+      BASE_DIR: /home/akmi/pits
+      EXPOSE_PORT: 41012
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/nextjs-kc}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-trustmark}:${POSTGRES_PASSWORD:-trustmark}@postgres:5432/${POSTGRES_DB:-trustmark}
+      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-account}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-20971520}
+      BLOCKCHAIN_RPC_URL: ${BLOCKCHAIN_RPC_URL}
+      BLOCKCHAIN_PRIVATE_KEY: ${BLOCKCHAIN_PRIVATE_KEY}
+      TEST_MODE: ${TEST_MODE:-False}
+    ports:
+      - "${EXPOSE_PORT:-41012}:41012"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
