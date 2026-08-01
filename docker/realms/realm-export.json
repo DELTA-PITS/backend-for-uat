@@ -17,13 +17,16 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "pits-local-client-secret",
-      "redirectUris": ["http://localhost:3000/api/auth/callback/keycloak"],
+      "redirectUris": ["http://localhost:3000/api/auth/callback/keycloak", "http://localhost:3000/*"],
       "webOrigins": ["http://localhost:3000"],
       "publicClient": false,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "protocol": "openid-connect",
-      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"]
+      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3000/*"
+      }
     }
   ],
   "users": [
