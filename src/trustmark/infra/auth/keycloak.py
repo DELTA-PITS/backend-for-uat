@@ -44,17 +44,13 @@ class KeycloakVerifier:
 
     def _fetch_jwks(self) -> dict[str, Any]:
         try:
-            oidc_response = requests.get(
-                f"{self.issuer_url}/.well-known/openid-configuration", timeout=5
-            )
+            oidc_response = requests.get(f"{self.issuer_url}/.well-known/openid-configuration", timeout=5)
             oidc_response.raise_for_status()
             oidc = oidc_response.json()
 
         except requests.RequestException as e:
             logger.exception("Failed to fetch Keylcoak OIDC configuration: %s", e)
-            raise HTTPException(
-                status_code=503, detail="Authentication provider unavailable"
-            )
+            raise HTTPException(status_code=503, detail="Authentication provider unavailable")
 
         except ValueError as e:
             logger.exception("Invalid JSON in Keycloak OIDC configuration: %s", e)
@@ -66,9 +62,7 @@ class KeycloakVerifier:
         jwks_uri = oidc["jwks_uri"]
 
         if not isinstance(jwks_uri, str) or not jwks_uri:
-            logger.exception(
-                "Keycloak OIDC configuration missing valid jwks_uri %r", oidc
-            )
+            logger.exception("Keycloak OIDC configuration missing valid jwks_uri %r", oidc)
             raise HTTPException(
                 status_code=500,
                 detail="Authentication provider returned invalid configuration",
@@ -81,9 +75,7 @@ class KeycloakVerifier:
 
         except requests.RequestException as e:
             logger.exception("failed to fetch JWKS: %s", e)
-            raise HTTPException(
-                status_code=503, detail="Authentication provider unavailable"
-            )
+            raise HTTPException(status_code=503, detail="Authentication provider unavailable")
 
         except ValueError as e:
             logger.exception("Invalid JSON in Keycloak JWKS response: %s", e)
@@ -165,9 +157,7 @@ def _extract_roles(claims: dict[str, Any], client_id: Optional[str]) -> Set[str]
     roles.update(realm_roles)
 
     if client_id:
-        client_roles = (
-            (claims.get("resource_access") or {}).get(client_id, {}).get("roles", [])
-        ) or []
+        client_roles = ((claims.get("resource_access") or {}).get(client_id, {}).get("roles", [])) or []
         roles.update(client_roles)
 
     return roles
@@ -188,9 +178,7 @@ async def get_current_principal(
         raise HTTPException(status_code=401, detail="Missing bearer token")
 
     claims = _verifier.verify(creds.credentials)
-    roles = _extract_roles(
-        claims, client_id=getattr(settings, "KEYCLOAK_ROLES_CLIENT_ID", None)
-    )
+    roles = _extract_roles(claims, client_id=getattr(settings, "KEYCLOAK_ROLES_CLIENT_ID", None))
 
     return Principal(
         sub=claims.get("sub", ""),

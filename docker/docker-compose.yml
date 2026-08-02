@@ -69,6 +69,7 @@ services:
       anvil:
         condition: service_healthy
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       BASE_DIR: /home/akmi/pits
       EXPOSE_PORT: 41012
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/nextjs-kc}
@@ -82,6 +83,12 @@ services:
       TEST_MODE: ${TEST_MODE:-False}
     ports:
       - "${EXPOSE_PORT:-41012}:41012"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:41012/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

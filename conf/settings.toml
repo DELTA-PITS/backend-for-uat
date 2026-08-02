@@ -1,8 +1,8 @@
 [default]
-log_file = "@format {env[BASE_DIR]}/logs/ptis.log"
-log_level = 10
+log_file = "@format {env[BASE_DIR]}/logs/trustmark.log"
+log_level = 20
 log_format = "%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s"
-db_path = "@format {env[BASE_DIR]}/resources/data/db/pits.db"
+db_path = "@format {env[BASE_DIR]}/resources/data/db/trustmark.db"
 api_prefix = "/api/v1"
 files_storage_path = "@format {env[BASE_DIR]}/resources/data/files-storage"
 
@@ -13,3 +13,9 @@ keycloak_issuer = "@format {env[KEYCLOAK_ISSUER]}"
 keycloak_issuer_url = "@format {env[KEYCLOAK_ISSUER_URL]}"
 keycloak_audience = "@format {env[KEYCLOAK_AUDIENCE]}"
 max_upload_bytes = "@format {env[MAX_UPLOAD_BYTES]}"
+
+[development]
+log_level = 10
+
+[production]
+log_level = 20

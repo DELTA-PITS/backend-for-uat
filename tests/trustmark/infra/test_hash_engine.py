@@ -25,9 +25,7 @@ class TestHashEngine:
         result_hash = generate_hash(file_content)
 
         # Verify against a known SHA-256 hash for "Hello World"
-        expected_hash = (
-            "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e"
-        )
+        expected_hash = "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e"
         assert result_hash == expected_hash
 
     def test_generate_hash_from_bytes(self):

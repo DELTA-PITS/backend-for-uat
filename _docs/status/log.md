@@ -4,6 +4,33 @@ File ini diupdate Claude Code **setiap sesi kerja selesai**. Entry terbaru selal
 
 ---
 
+## [2026-08-02 04:45] — Claude Code
+
+- **Progress**: Semua temuan #2–#12 dari `_docs/audit/audit-2026-07-31.md` diperbaiki (#1 — secret `docker/.env.save` di git history — sengaja tidak disentuh, masih butuh keputusan eksplisit soal `git filter-repo`/BFG). Belum di-commit, menunggu review user.
+- **Selesai sesi ini**:
+  - **#2 (High)** — wiring `TEST_MODE` di `src/trustmark/main.py` dipindah ke module level (bukan `if __name__=="__main__"` saja) supaya konsisten aktif lewat entry-point manapun (`uv run start`, `uvicorn`, `python -m trustmark.main`); ditambah guard: raise `RuntimeError` kalau `TEST_MODE=true` dan `ENVIRONMENT=production`.
+  - **#3 (High, sebagian)** — file workflow CI minimal dibuat: `.github/workflows/check-linting-on-pr.yml` (ruff check + format) dan `.github/workflows/run-unit-tests-on-pr.yml` (pytest, tanpa docker/Locust E2E yang berat). **TIDAK di-commit** — baru ketahuan saat mau commit bahwa `.gitignore:216-217` sengaja meng-ignore `.github/workflows/`, sejalan dengan commit `95464d2`/`4b94c81` yang eksplisit menghapus CI dari repo UAT ini. Ersa memutuskan untuk skip commit-nya dan hormati keputusan lama — file `.yml` tetap ada di working tree (gitignored) kalau nanti mau diaktifkan.
+  - **#4 (High)** — test baru: `tests/trustmark/api/v1/test_documents.py` (integration test endpoint register/records/verify pakai `TestClient` + blockchain di-mock) dan `tests/trustmark/infra/auth/test_keycloak.py` (unit test JWT verify pakai RSA key asli, JWKS fetch/cache, role extraction, `require_roles`). Total 32 test baru, semua lulus. Ditambah `tests/conftest.py` untuk setup env var test.
+  - **#5 (Medium)** — 13 file dead code (0 byte + `models/documents.py` yang tak dipakai) dihapus via `git rm`.
+  - **#6 (Medium)** — healthcheck `trustmark-app` ditambah ke `docker/docker-compose.yml` (menyamakan dengan versi `.github/docker`).
+  - **#7 (Medium)** — `conf/settings.toml`: rename `ptis.log`→`trustmark.log`, `pits.db`→`trustmark.db`; `log_level` sekarang default INFO (20) di `[default]`, DEBUG (10) di `[development]`; Dynaconf `environments=True` dipakai sungguhan lewat `env_switcher="ENVIRONMENT"` (var yang sama dipakai guard TEST_MODE di #2).
+  - **#8 (Medium)** — `pyproject.toml`: `ruff`/`pytest` dipindah ke `[dependency-groups] dev`, dependency asing `sqlalchemy-orm` & `emoji` (sudah tak dipakai) dihapus, ditambah `[tool.ruff]` config (line-length 110, select E+F, ignore B008 untuk pola `Depends()` FastAPI). `uv.lock` di-regenerate (`uv lock`) — **wajib**, karena tanpa ini `uv sync --frozen` di Docker/CI akan gagal.
+  - **#9 (Low)** — bug `is not str` di `tests/locust/locustfiles/verify.py` diperbaiki jadi `not isinstance(..., str)`.
+  - **#10 (Low)** — endpoint `/health` duplikat di `main.py` dihapus (pakai versi `api/v1/metrics.py` yang sudah lengkap dokumentasinya); `print()` debug + dependency `emoji` dihapus dari lifespan handler.
+  - **#11 (Low)** — CORS `allow_methods`/`allow_headers` di `main.py` dipersempit dari wildcard `["*"]` jadi `["GET","POST"]` / `["Authorization","Content-Type"]`.
+  - **#12 (Low)** — komentar basi `#Temporary, will be removed later` di `docker/Dockerfile` dihapus (duplikasi `docker/` vs `.github/docker/` sendiri tidak digabung penuh — keduanya menargetkan environment yang beda: mesin dev lokal vs GitHub Actions runner dengan path absolut berbeda; penggabungan penuh butuh keputusan arsitektur/ADR terpisah).
+  - Semua kode diformat ulang dengan `ruff format .` (10 file, whitespace/line-wrap saja, sudah dicek diff-nya murni formatting) supaya CI lint yang baru diaktifkan tidak langsung merah.
+  - Ditemukan (bukan disebabkan perubahan sesi ini): `tests/trustmark/infra/test_blockchain_connector.py::test_read_transaction_value_success` gagal — mock di test itu lupa isi key `blockNumber`. Pre-existing, belum diperbaiki (di luar scope #2–#12).
+- **Blocker / butuh keputusan dari Ersa**:
+  - Review & commit semua perubahan di atas (belum di-commit).
+  - #1 (Critical, `docker/.env.save` di git history) masih belum ditindaklanjuti — butuh keputusan eksplisit soal rewrite history.
+  - Bug pre-existing di `test_read_transaction_value_success` (lihat atas) — perlu diputuskan apakah mau sekalian diperbaiki.
+- **Next steps**:
+  - Setelah commit, jalankan `uv sync` sekali di semua environment lokal/dev (uv.lock berubah) supaya tidak ada drift.
+  - Test manual end-to-end di Docker Compose (khususnya healthcheck app service yang baru & TEST_MODE guard) sebelum deploy — belum divalidasi di lingkungan Docker sungguhan, hanya di venv lokal.
+
+---
+
 ## [2026-08-02 03:30] — Claude Code
 
 - **Progress**: Audit logout dari sesi frontend (`frontend-for-uat/_docs/security/session-auth-audit-2026-08-02.md`) menemukan akar masalah "Invalid redirect uri" ada di konfigurasi Keycloak client `nextjs-web`, bukan di kode Next.js. `realms/realm-export.json` diperbarui; instance Keycloak yang sedang jalan (container `trustmark-keycloak-1`) BELUM ikut diperbaiki — perlu tindakan manual user (lihat blocker).

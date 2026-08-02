@@ -21,7 +21,7 @@ _(kosong)_
 | # | Task | Tipe | Prioritas | Sumber | Catatan |
 |---|------|------|-----------|--------|---------|
 | 2 | Perbaiki wiring `TEST_MODE` bypass agar konsisten terlepas dari cara start aplikasi; tambahkan guard `ENVIRONMENT != production` | Security fix | High | Audit #2 | Dikerjakan 2026-08-02, belum di-commit |
-| 3 | Aktifkan kembali CI minimal (lint + unit test) sebelum lanjut dari tahap UAT | Infra | High | Audit #3 | idem |
+| 3 | Aktifkan kembali CI minimal (lint + unit test) sebelum lanjut dari tahap UAT | Infra | High | Audit #3 | File workflow dibuat (`.github/workflows/check-linting-on-pr.yml`, `run-unit-tests-on-pr.yml`) tapi **TIDAK di-commit** — `.gitignore:216-217` sengaja meng-ignore `.github/workflows/`, sejalan dengan commit `95464d2`/`4b94c81` yang eksplisit menghapus CI dari repo UAT ini. Butuh konfirmasi eksplisit dari Ersa sebelum diaktifkan (override gitignore) |
 | 4 | Tambah test integrasi untuk `api/v1/documents.py` (register/verify/records) | Test coverage | High | Audit #4 | idem |
 | 5 | Tambah test untuk `infra/auth/keycloak.py` (verifikasi JWT, role) | Test coverage | High | Audit #4 | idem |
 | 6 | Bersihkan dead code (10+ file 0 byte) atau beri catatan jelas "not implemented" | Refactor | Medium | Audit #5 | idem |

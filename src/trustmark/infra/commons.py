@@ -7,15 +7,14 @@ from dynaconf import Dynaconf
 
 os.environ["BASE_DIR"] = os.getenv(
     "BASE_DIR",
-    os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    ),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
 )
 
 settings = Dynaconf(
     settings_files=["conf/*settings.toml", "conf/.secrets.toml", "conf/*settings.json"],
     root_path=os.getenv("BASE_DIR"),
     environments=True,
+    env_switcher="ENVIRONMENT",
     load_dotenv=True,
 )
 

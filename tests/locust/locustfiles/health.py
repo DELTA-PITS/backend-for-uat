@@ -13,9 +13,7 @@ class health_user(HttpUser):
 
     @task
     def health(self):
-        with self.client.get(
-            f"{settings.API_PREFIX}/health", catch_response=True
-        ) as response:
+        with self.client.get(f"{settings.API_PREFIX}/health", catch_response=True) as response:
             match response.status_code:
                 case 200:
                     if response.json() == {"status": "ok"}:

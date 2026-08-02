@@ -17,17 +17,20 @@ dependencies = [
     "locust>=2.43.3",
     "pydantic>=2.12.5",
     "psycopg2-binary>=2.9.10",
-    "pytest>=9.0.2",
-    "sqlalchemy-orm>=1.2.10",
     "python-multipart>=0.0.22",
     "sqlalchemy>=2.0.48",
     "tomli>=2.4.0",
     "uvicorn>=0.41.0",
-    "emoji>=2.15.0",
     "python-jose[cryptography]>=3.5.0",
     "requests>=2.33.1",
-    "ruff>=0.15.12",
     "web3>=7.16.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "httpx>=0.28.1",
+    "ruff>=0.15.12",
 ]
 
 [project.scripts]
@@ -38,4 +41,18 @@ package = true
 
 [tool.trustmark]
 title = "Proof of Concept Trustmark Service"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = [
+    # B008: function calls in argument defaults is the standard FastAPI
+    # `Depends()`/`File()` pattern, not a bug.
+    "B008",
+    # E501: long f-string assertion messages in locust load tests are fine.
+    "E501",
+]
 

@@ -27,21 +27,19 @@ class verify_user(HttpUser):
                         response_body = response.json()
 
                         if response_body["valid"] is not True:
-                            response.failure(
-                                "Unexpected 'valid' value. Expected True, received: False"
-                            )
+                            response.failure("Unexpected 'valid' value. Expected True, received: False")
 
                         elif response_body["issuer_id"] != "":
                             response.failure(
                                 f"Unexpected 'issuer_id' value. Expected an empty string, received: {response_body['issuer_id']}"
                             )
 
-                        elif response_body["record_id"] is not str:
+                        elif not isinstance(response_body["record_id"], str):
                             response.failure(
                                 f"Unexpected 'record_id' value type. Expected a string, received: {type(response_body['record_id'])}"
                             )
 
-                        elif response_body["created_at"] is not str:
+                        elif not isinstance(response_body["created_at"], str):
                             response.failure(
                                 f"Unexpected 'created_at' value type. Expected a string, received: {type(response_body['created_at'])}"
                             )
@@ -71,9 +69,7 @@ class verify_user(HttpUser):
                         response_body = response.json()
 
                         if response_body["valid"] is not True:
-                            response.failure(
-                                "Unexpected 'valid' value. Expected True, received: False"
-                            )
+                            response.failure("Unexpected 'valid' value. Expected True, received: False")
 
                         elif response_body["content_hash"] != hash:
                             response.failure(
@@ -101,9 +97,7 @@ class verify_user(HttpUser):
                     response_body = response.json()
 
                     if response_body["valid"] is not False:
-                        response.failure(
-                            "Unexpected 'valid' value. Expected False, received: True"
-                        )
+                        response.failure("Unexpected 'valid' value. Expected False, received: True")
                     elif response_body["content_hash"] != file_hash:
                         response.failure(
                             f"Unexpected 'content_hash' value. Expected {file_hash}, received: {response_body['content_hash']}"
@@ -112,6 +106,4 @@ class verify_user(HttpUser):
                         response.success()
 
                 case _:
-                    response.failure(
-                        f"{response.status_code}: {response.reason}. {response.text}"
-                    )
+                    response.failure(f"{response.status_code}: {response.reason}. {response.text}")

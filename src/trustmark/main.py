@@ -2,7 +2,6 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-import emoji
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from trustmark.infra.auth.keycloak import Principal, get_current_principal
@@ -11,7 +10,6 @@ import uvicorn
 from trustmark.api.v1 import metrics, documents
 from trustmark.infra.commons import get_env_int, settings, project_details
 from trustmark.infra.db import engine, Base
-from trustmark.infra.auth.keycloak import require_roles
 
 
 @asynccontextmanager
@@ -30,8 +28,6 @@ async def lifespan(application: FastAPI):
         None: The context manager does not yield any value.
 
     """
-    print("====== start up==========")
-    print(emoji.emojize(":thumbs_up:"))
     logging.info("Starting up")
     Base.metadata.create_all(bind=engine)
     yield
@@ -56,21 +52,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
 EXPOSE_PORT = get_env_int("EXPOSE_PORT", 41012)
 log_config = uvicorn.config.LOGGING_CONFIG
-logging.basicConfig(
-    filename=settings.LOG_FILE, level=settings.LOG_LEVEL, format=settings.LOG_FORMAT
-)
-
-@app.get("/health", tags=["system"])
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
+logging.basicConfig(filename=settings.LOG_FILE, level=settings.LOG_LEVEL, format=settings.LOG_FORMAT)
 
 app.include_router(
     documents.router_upload,
@@ -106,8 +95,16 @@ async def override_get_current_principal():
     )
 
 
-if __name__ == "__main__":
-    if os.environ.get("TEST_MODE", "false").lower() == "true":
-        app.dependency_overrides[get_current_principal] = override_get_current_principal
+_test_mode = os.environ.get("TEST_MODE", "false").lower() == "true"
+_environment = os.environ.get("ENVIRONMENT", "development").lower()
 
+if _test_mode and _environment == "production":
+    raise RuntimeError("TEST_MODE cannot be enabled when ENVIRONMENT=production")
+
+if _test_mode:
+    logging.warning("TEST_MODE is enabled: authentication is bypassed for all requests")
+    app.dependency_overrides[get_current_principal] = override_get_current_principal
+
+
+if __name__ == "__main__":
     main()
