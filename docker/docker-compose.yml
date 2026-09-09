@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-trustmark}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trustmark}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -37,7 +37,7 @@ services:
       - KC_BOOTSTRAP_ADMIN_USERNAME=${KEYCLOAK_USER}
       - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_PASS}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,7 +46,7 @@ services:
     entrypoint: ["anvil"]
     command: ["--host", "0.0.0.0", "--port", "8545"]
     ports:
-      - "8545:8545"
+      - "127.0.0.1:8545:8545"
     healthcheck:
       test:
         ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
@@ -81,7 +81,7 @@ services:
       BLOCKCHAIN_PRIVATE_KEY: ${BLOCKCHAIN_PRIVATE_KEY}
       TEST_MODE: ${TEST_MODE:-False}
     ports:
-      - "${EXPOSE_PORT:-41012}:41012"
+      - "127.0.0.1:${EXPOSE_PORT:-41012}:41012"
     restart: unless-stopped
 
 volumes:
