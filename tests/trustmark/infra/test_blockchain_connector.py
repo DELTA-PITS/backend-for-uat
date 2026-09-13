@@ -87,15 +87,69 @@ class TestBlockchainConnector:
 
     @patch("trustmark.infra.blockchain_connector.Web3")
     def test_read_transaction_value_success(self, mock_web3, connector):
+        """FIXED 2026-09-09: this fixture was stale against the current
+        connector contract - `read_transaction_value` requires a mined
+        transaction (`blockNumber` present, and that block resolvable to a
+        `timestamp`) and returns a {"value", "timestamp"} dict, not a bare
+        string. The old version of this test mocked `get_transaction` with
+        only an `input` field and asserted the return value was a plain
+        string, so it was actually exercising the "still pending" 400 path
+        by accident and failing on the assertion regardless.
+
+        This is the exact fixture staleness the accompanying paper's §5.1
+        describes fixing ("16 out of 17 ... one outdated test fixture was
+        then corrected ... final test run passed 17 out of 17") - but this
+        repository still had the old, broken version prior to this fix, so
+        that corrected state was not actually persisted here. Re-running
+        this file before this edit reproduces the paper's original 16/17
+        result exactly."""
         mock_web3_instance = MagicMock()
         mock_web3_instance.is_connected.return_value = True
         mock_web3_instance.eth.get_transaction.return_value = {
-            "input": VALUE_PREFIX + b"test value"
+            "input": VALUE_PREFIX + b"test value",
+            "blockNumber": 42,
+        }
+        mock_web3_instance.eth.get_block.return_value = {"timestamp": 1_757_000_000}
+        mock_web3.return_value = mock_web3_instance
+
+        result = connector.read_transaction_value("0x1234")
+        assert result["value"] == "test value"
+        assert result["timestamp"].year == 2025  # 1_757_000_000 unix -> 2025-09-04 UTC
+
+    @patch("trustmark.infra.blockchain_connector.Web3")
+    def test_read_transaction_value_pending_no_block_number_returns_400(self, mock_web3, connector):
+        """Gap-fill (2026-09-09): the "still pending" branch (transaction
+        broadcast but not yet mined) had no coverage at all before this."""
+        mock_web3_instance = MagicMock()
+        mock_web3_instance.is_connected.return_value = True
+        mock_web3_instance.eth.get_transaction.return_value = {
+            "input": VALUE_PREFIX + b"test value",
+            "blockNumber": None,
         }
         mock_web3.return_value = mock_web3_instance
 
-        value = connector.read_transaction_value("0x1234")
-        assert value == "test value"
+        with pytest.raises(HTTPException) as exc_info:
+            connector.read_transaction_value("0x1234")
+        assert exc_info.value.status_code == 400
+        assert "pending" in exc_info.value.detail.lower()
+
+    @patch("trustmark.infra.blockchain_connector.Web3")
+    def test_read_transaction_value_block_missing_timestamp_returns_400(self, mock_web3, connector):
+        """Gap-fill (2026-09-09): a mined block with no resolvable timestamp
+        (edge case on some dev/test chains) also had no coverage."""
+        mock_web3_instance = MagicMock()
+        mock_web3_instance.is_connected.return_value = True
+        mock_web3_instance.eth.get_transaction.return_value = {
+            "input": VALUE_PREFIX + b"test value",
+            "blockNumber": 42,
+        }
+        mock_web3_instance.eth.get_block.return_value = {"timestamp": None}
+        mock_web3.return_value = mock_web3_instance
+
+        with pytest.raises(HTTPException) as exc_info:
+            connector.read_transaction_value("0x1234")
+        assert exc_info.value.status_code == 400
+        assert "pending" in exc_info.value.detail.lower()
 
     @patch("trustmark.infra.blockchain_connector.Web3")
     def test_read_transaction_value_invalid_format(self, mock_web3, connector):
@@ -145,3 +199,17 @@ class TestBlockchainConnector:
 
         receipt = connector.wait_for_receipt("0x1234")
         assert receipt == 99955
+
+    @patch("trustmark.infra.blockchain_connector.Web3")
+    def test_wait_for_receipt_connection_failure(self, mock_web3, connector):
+        """Gap-fill (2026-09-09): only the success path had coverage - the
+        node-down / not-yet-connected case for this method (relevant to
+        VER-8 from the 2026-09-09 live QA pass) did not."""
+        mock_web3_instance = MagicMock()
+        mock_web3_instance.is_connected.return_value = False
+        mock_web3.return_value = mock_web3_instance
+
+        with pytest.raises(HTTPException) as exc_info:
+            connector.wait_for_receipt("0x1234")
+        assert exc_info.value.status_code == 500
+        assert "Blockchain connection failed" in exc_info.value.detail
