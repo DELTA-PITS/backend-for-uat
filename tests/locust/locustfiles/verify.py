@@ -26,22 +26,43 @@ class verify_user(HttpUser):
                     case 200:
                         response_body = response.json()
 
+                        # PASS 5 (2026-09-14) fix - see _docs/qa/pass5/ report,
+                        # "Section 9 / test-code findings" for the original
+                        # (defective) assertions this replaces:
+                        #   - `is not str` / `is not str` compared a VALUE to
+                        #     the TYPE OBJECT `str`, which is always True for
+                        #     any string instance - these branches fired
+                        #     unconditionally as failures whenever reached,
+                        #     which (given issuer_id was also checked against
+                        #     a hardcoded "must be empty" expectation) meant
+                        #     historical benchmark "failure" counts likely
+                        #     included requests that returned a fully correct
+                        #     200 response.
+                        #   - `issuer_id != ""` baked in the known Finding-2
+                        #     bug (missing Keycloak `sub` claim -> empty
+                        #     issuer_id) as the EXPECTED/correct value. Fixed
+                        #     to assert the intended correct behaviour
+                        #     (non-empty issuer_id) instead - this will keep
+                        #     failing for as long as Finding 2 is unfixed,
+                        #     which is accurate, not a test bug.
                         if response_body["valid"] is not True:
                             response.failure(
                                 "Unexpected 'valid' value. Expected True, received: False"
                             )
 
-                        elif response_body["issuer_id"] != "":
+                        elif not response_body.get("issuer_id"):
                             response.failure(
-                                f"Unexpected 'issuer_id' value. Expected an empty string, received: {response_body['issuer_id']}"
+                                f"issuer_id is empty/missing (Finding 2 - Keycloak token has no "
+                                f"'sub' claim). Intended correct behaviour is a non-empty "
+                                f"publisher identity. Received: {response_body.get('issuer_id')!r}"
                             )
 
-                        elif response_body["record_id"] is not str:
+                        elif not isinstance(response_body["record_id"], str):
                             response.failure(
                                 f"Unexpected 'record_id' value type. Expected a string, received: {type(response_body['record_id'])}"
                             )
 
-                        elif response_body["created_at"] is not str:
+                        elif not isinstance(response_body["created_at"], str):
                             response.failure(
                                 f"Unexpected 'created_at' value type. Expected a string, received: {type(response_body['created_at'])}"
                             )
@@ -89,7 +110,14 @@ class verify_user(HttpUser):
 
     @task
     def verify_not_stored(self):
-        file_hash = "ThisIsNotAStoredHash"
+        # PASS 5 (2026-09-14) fix: the original literal "ThisIsNotAStoredHash"
+        # is not a 64-char hex string, so verify_by_hash()'s own format
+        # validation rejects it with 400 BEFORE ever reaching the "not
+        # found" branch this task intends to exercise - every request here
+        # was a guaranteed, permanent 100% failure that had nothing to do
+        # with whether a hash is registered or not. Replaced with a
+        # well-formed but never-registered 64-hex-char hash.
+        file_hash = "ff" * 32
 
         with self.client.get(
             url=f"{settings.API_PREFIX}/verify/{file_hash}",

@@ -1,0 +1,2 @@
+Method,Name,Error,Occurrences
+GET,/api/v1/verify/51cd829961deef699d7099eb27a5b832c8c6c054407878d55917b490989cab55,"CatchResponseError(""issuer_id is empty/missing (Finding 2 - Keycloak token has no 'sub' claim). Intended correct behaviour is a non-empty publisher identity. Received: ''"")",285

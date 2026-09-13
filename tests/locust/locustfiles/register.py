@@ -1,13 +1,41 @@
 # --------------------------------------------------------------------------------
 # This file will carry out a load test and assertions on the "/api/v1/register"
 # endpoint
+#
+# PASS 5 (2026-09-14) fix - see _docs/qa/pass5/ report, "Section 9 / test-code
+# findings": this file never sent an Authorization header at all. Against a
+# backend running with TEST_MODE=False (the current docker/.env default -
+# real Keycloak auth enforced), every request here got 401 before reaching
+# any of the assertions below, making this file's historical benchmark
+# numbers meaningless as a measurement of /register's real behaviour unless
+# the target was running with TEST_MODE=True (the auth-bypass finding - see
+# main.py). on_start() now fetches one real Keycloak token per simulated
+# user so requests exercise the actual authenticated code path.
 # --------------------------------------------------------------------------------
+import requests
 from locust import HttpUser, task, constant_throughput
 from src.trustmark.infra.commons import settings
+
+KEYCLOAK_TOKEN_URL = "http://localhost:8080/realms/nextjs-kc/protocol/openid-connect/token"
 
 
 class document(HttpUser):
     wait_time = constant_throughput(task_runs_per_second=5)
+
+    def on_start(self):
+        resp = requests.post(
+            KEYCLOAK_TOKEN_URL,
+            data={
+                "grant_type": "password",
+                "client_id": "nextjs-web",
+                "client_secret": "pits-local-client-secret",
+                "username": "publisher-a",
+                "password": "PassA-2026!",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        self.token = resp.json()["access_token"]
 
     @task
     def register(self):
@@ -17,6 +45,7 @@ class document(HttpUser):
             with self.client.post(
                 url=f"{settings.API_PREFIX}/register",
                 catch_response=True,
+                headers={"Authorization": f"Bearer {self.token}"},
                 files={"file": test_file},
             ) as response:
                 match response.status_code:
@@ -62,7 +91,10 @@ class document(HttpUser):
     @task
     def register_no_file(self):
         with self.client.post(
-            url=f"{settings.API_PREFIX}/register", catch_response=True, files={}
+            url=f"{settings.API_PREFIX}/register",
+            catch_response=True,
+            headers={"Authorization": f"Bearer {self.token}"},
+            files={},
         ) as response:
             match response.status_code:
                 case 422:
