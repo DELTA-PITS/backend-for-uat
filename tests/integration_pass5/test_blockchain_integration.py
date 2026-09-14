@@ -97,16 +97,99 @@ class TestBlockchainIntegration:
         except Exception as e:
             print(f"BC-INT-07 (direct web3): get_transaction for unknown hash raised {type(e).__name__}: {e}")
 
-    def test_bc_int_08_pending_transaction_handling(self):
-        """Anvil in --host/--port mode (no --block-time flag set in
-        docker-compose.yml) auto-mines every transaction immediately, so a
-        genuinely 'pending' transaction is not reproducible without changing
-        Anvil's mining mode. Documented as NOT RUN / not reproducible in this
-        environment, rather than fabricated."""
-        import pytest
-        pytest.skip("Anvil auto-mines instantly in this compose config (no --block-time); "
-                    "pending-transaction state is not reproducible without restarting Anvil "
-                    "with interval mining, which was out of scope for this pass.")
+    def test_bc_int_08_pending_transaction_handling(self, db_conn):
+        """Anvil in --host/--port mode (no --block-time flag in
+        docker-compose.yml) auto-mines every transaction instantly, so a
+        genuinely pending transaction can't occur through the normal
+        register() flow (which itself blocks on wait_for_receipt() before
+        ever writing a row to Postgres - the app never persists an unmined
+        tx under normal operation).
+
+        To exercise the real 'pending' branch of
+        BlockchainConnector.read_transaction_value() for real (not mocked),
+        this test: (1) restarts Anvil with --block-time so mining is no
+        longer instant, (2) fires a transaction directly via
+        BlockchainConnector.create_transaction() WITHOUT waiting for a
+        receipt, (3) inserts a matching RegistryRecord row directly into
+        Postgres (bypassing register(), which is exactly what would refuse
+        to do this), (4) hits the real GET /verify/{hash} endpoint while the
+        tx is still unmined, and (5) restores Anvil to instant mining
+        afterwards so later tests are unaffected."""
+        import subprocess
+        import time
+        import uuid
+
+        import requests
+        from web3 import Web3
+
+        from trustmark.infra.blockchain_connector import BlockchainConnector
+
+        compose_dir = "/Users/laksaersa/GitHub/_personal/_PITS/backend-for-uat/docker"
+        block_time_seconds = 6
+        temp_container = "bc-int-08-anvil"
+
+        subprocess.run(["docker", "compose", "stop", "anvil"], cwd=compose_dir, check=True, capture_output=True)
+        subprocess.run(["docker", "rm", "-f", temp_container], capture_output=True)
+
+        run_result = subprocess.run(
+            [
+                "docker", "compose", "run", "--rm", "-d",
+                "--use-aliases", "--service-ports", "--name", temp_container,
+                "anvil", "--host", "0.0.0.0", "--port", "8545", "--block-time", str(block_time_seconds),
+            ],
+            cwd=compose_dir, capture_output=True, text=True,
+        )
+        assert run_result.returncode == 0, f"failed to start block-time Anvil: {run_result.stderr}"
+
+        try:
+            w3 = Web3(Web3.HTTPProvider(RPC_URL))
+            for _ in range(20):
+                if w3.is_connected():
+                    break
+                time.sleep(1)
+            assert w3.is_connected(), "block-time Anvil never became reachable"
+
+            connector = BlockchainConnector(
+                rpc_url=RPC_URL,
+                private_key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            )
+            fake_content_hash = uuid.uuid4().hex + uuid.uuid4().hex[:32]
+            tx_hash = connector.create_transaction(fake_content_hash)
+            print(f"BC-INT-08: fired tx {tx_hash} against a {block_time_seconds}s block-time chain, NOT waiting for receipt")
+
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO registry_records (id, content_hash, transaction_hash, issuer_id) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (str(uuid.uuid4()), fake_content_hash, tx_hash, "bc-int-08"),
+                )
+
+            resp = requests.get(f"http://127.0.0.1:41012/api/v1/verify/{fake_content_hash}", timeout=15)
+            print(f"BC-INT-08: verify-by-hash for a still-pending tx -> {resp.status_code}: {resp.text}")
+            assert resp.status_code == 400, (
+                f"expected 400 'still pending' while the tx is genuinely unmined, got {resp.status_code}: {resp.text}"
+            )
+            assert "pending" in resp.json().get("detail", "").lower()
+
+            # Confirm it resolves correctly once actually mined, closing the loop.
+            w3.eth.wait_for_transaction_receipt(tx_hash, timeout=block_time_seconds + 15)
+            resp_after_mining = requests.get(f"http://127.0.0.1:41012/api/v1/verify/{fake_content_hash}", timeout=15)
+            print(f"BC-INT-08: same hash after mining -> {resp_after_mining.status_code}: {resp_after_mining.text}")
+            assert resp_after_mining.status_code == 200
+            assert resp_after_mining.json()["valid"] is True
+        finally:
+            subprocess.run(["docker", "rm", "-f", temp_container], capture_output=True)
+            subprocess.run(["docker", "compose", "up", "-d", "anvil"], cwd=compose_dir, check=True, capture_output=True)
+            for _ in range(20):
+                try:
+                    r = requests.post(
+                        RPC_URL, json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}, timeout=3
+                    )
+                    if r.status_code == 200:
+                        break
+                except requests.exceptions.RequestException:
+                    pass
+                time.sleep(1)
 
     def test_bc_int_09_node_unavailable(self, token_a):
         compose_dir = "/Users/laksaersa/GitHub/_personal/_PITS/backend-for-uat/docker"

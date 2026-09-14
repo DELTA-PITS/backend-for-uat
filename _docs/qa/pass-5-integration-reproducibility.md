@@ -18,7 +18,7 @@ No new unit tests were added to inflate the existing 94 (backend) / 30 (frontend
 - **Anvil is a non-persistent local dev chain**: a container restart loses all transaction history (confirmed by direct experiment). This is an environment/prototype limitation, explicitly not a claim about any real blockchain network's durability.
 - **Malformed bearer token → 500, not 401, reconfirmed live** (previously a unit-mocked-only finding; now confirmed against the real `KeycloakVerifier.verify()` path with a real HTTP round trip).
 - Locust load-test code had **two real, previously undiagnosed bugs** (`is not str` identity comparisons that always evaluate true, and a hardcoded "must equal empty string" expectation baked around the issuer_id bug) plus a **missing Authorization header** in `register.py` that made 100% of historical `/register` load-test traffic fail outright unless the target was running with `TEST_MODE=True` (the auth-bypass mechanism documented in the master export). All three are fixed here, and 3 fresh 60-second runs were captured against the local stack. These numbers are **not** compared 1:1 against the historical 8,880/8,245/8,165 figures — the historical runs' target configuration (TEST_MODE on/off, auth wiring) cannot be determined from the numbers alone, and this pass explicitly does not claim they are the same environment.
-- **Test counts, exact**: 53 new integration tests written for this pass. **44 PASS, 8 FAIL (all documenting real, reproduced findings — not test defects), 1 SKIP** (Anvil pending-tx state not reproducible in this compose config). *(Corrected 2026-09-14 after a second, independent rerun requested for verification: the first published version of this report said 45/7/1, which undercounted by one FAIL — `FILE-09` was narratively documented as a finding but its test had no assertion, so pytest reported it as PASS regardless of the server's actual response; the assertion was added and the whole suite rerun from a fresh stack to confirm. See §9 for the full reconciliation.)*
+- **Test counts, exact — final**: 53 new integration tests written for this pass. **48 PASS, 5 FAIL (all documenting real, reproduced findings — not test defects), 0 SKIP.** This number went through two same-day corrections as the suite was independently re-verified and hardened, both fully traced in §9/§10: 45/7/1 (initial) → 44/8/1 (a missing test assertion was found and fixed) → 47/5/1 (3 of the 8 FAILs were application-code bugs, fixed) → **48/5/0** (the one remaining SKIP, `BC-INT-08`, was converted into a real executed test rather than left skipped). The 5 remaining FAILs all trace back to a single root cause (Finding 2, §3) that is a Keycloak configuration gap, not an application code bug — see §10.3/§10.4.
 
 ---
 
@@ -172,7 +172,7 @@ This is the single most important confirmation in this pass: the 2026-09-09 find
 | BC-INT-04/05 | On-chain value == uploaded SHA-256 | PASS | Exact match confirmed. |
 | BC-INT-06 | DB `transaction_hash` resolves to a real Anvil transaction | PASS | — |
 | BC-INT-07 | Unknown transaction hash / unregistered content_hash | PASS | `verify_by_hash` → `valid:false` (DB-level, never reaches Anvil); direct `web3.eth.get_transaction` on a never-broadcast hash → `TransactionNotFound`, as expected. |
-| BC-INT-08 | Pending-transaction handling | **SKIP** | Anvil in this compose config auto-mines every transaction instantly (no `--block-time`); a genuinely pending tx is not reproducible without changing Anvil's mining mode, out of scope for this pass. |
+| BC-INT-08 | Pending-transaction handling | **PASS** (no longer skipped, 2026-09-14) | Originally skipped because Anvil in this compose config auto-mines instantly. Fixed by having the test itself temporarily restart Anvil with `--block-time`, fire a real unmined transaction via `BlockchainConnector.create_transaction()` directly (bypassing `register()`, which always blocks until mined and so never persists a pending tx under normal operation), insert a matching DB row, and hit the real `GET /verify/{hash}` endpoint while genuinely unmined. Got the real `400 "Transaction is still pending"` response, then confirmed it resolves to `200 valid:true` once actually mined. Anvil is restored to instant mining afterward. See §10.5. |
 | BC-INT-09 | Anvil unavailable during `/register` | PASS (documented) | `500 "Blockchain connection failed"` — the connector's own `HTTPException(500)` from `_connect()`, propagated with no wrapping. Anvil restarted and confirmed healthy afterward. |
 | BC-INT-10 | Anvil container restart — data survival | PASS (documents a real limitation) | Transaction registered before the restart was **lost** (`TransactionNotFound`) after `docker compose restart anvil`. Anvil's default in-memory chain has no state-persistence flag configured. Documented explicitly as an environment/prototype limitation, not a claim about any real chain's durability. |
 
@@ -213,7 +213,7 @@ This is the highest-value evidence in this pass for the paper: the entire chain 
 | RES-02 | Keycloak unavailable | PASS (documents behaviour) | New login attempts correctly fail (connection refused) while Keycloak is down. An **already-issued** token continued to be accepted by the backend while Keycloak was stopped — `KeycloakVerifier` caches JWKS for up to 3600s (`jwks_ttl_seconds`), so a backend that has already fetched a signing key can keep validating tokens signed with it even with Keycloak fully offline. This is expected caching behaviour, not a bug, but worth noting for the paper: Keycloak availability and backend auth availability are not perfectly coupled. |
 | RES-03 | Anvil unavailable during `/register` | see BC-INT-09 | 500. |
 | RES-04 | Anvil unavailable during `/verify` (for an already-registered doc) | PASS (documents behaviour) | `verify_full()` propagates the connector's `500` unhandled, same shape as register-side. |
-| RES-05 | Transaction timeout/pending | not reproducible | See BC-INT-08 — Anvil auto-mines instantly in this config. |
+| RES-05 | Transaction timeout/pending | see BC-INT-08 | Now reproduced for real — see §10.5. |
 | RES-06 | Backend container restart preserves already-committed data | PASS | Record registered before `docker compose restart trustmark-app` was still present and correct after the container came back healthy. |
 | RES-07 | Frontend/backend network failure | NOT RUN | No frontend dev server was started as part of this pass (backend-only local stack, see §4.6 scope note) — out of scope for this pass, not fabricated. |
 
@@ -338,7 +338,6 @@ See §5.4 (T1-T4). All changes are in `tests/locust/locustfiles/register.py` and
 
 - **DUP-4-style true race condition**: not forced to occur in this pass's 5-concurrent-request trial (exactly 1 authoritative row resulted). A tighter, larger-N concurrency test (e.g., 50+ simultaneous identical requests with a barrier to synchronize dispatch) would be needed to more aggressively probe the check-then-insert window in `documents.py::register()`.
 - **KC-INT-10/11 (true issuer/audience mismatch)**: still only a kid-tampering proxy, same limitation as the 2026-09-09 pass — needs a second local Keycloak realm with its own signing key to test a *validly signed, wrong-issuer* token.
-- **BC-INT-08 (pending transaction)**: not reproducible without reconfiguring Anvil's mining mode (`--block-time`), out of scope for this pass.
 - **RES-07 (frontend/backend network failure)**: no frontend dev server was part of this pass's local stack; not run.
 - **Frontend/nginx layers of file validation** (FILE section): explicitly out of scope for this backend-only local stack — see 2026-09-09/13 passes for what's known there.
 - **`TEST_MODE=True` live re-verification**: the auth-bypass finding (R6) remains UNIT-MOCKED + SOURCE-OBSERVED only; deliberately not toggled live in this pass to avoid conflating "finding evidence" with "exercising a security bypass," even in a disposable local environment.
@@ -392,6 +391,20 @@ Full Pass 5 integration suite (53 tests) rerun end-to-end after the fixes, again
 **Result: 47 PASS / 5 FAIL / 1 SKIP** (up from 44/8/1 before the fixes).
 
 Confirmed fixed (now PASS): `KC-INT-08` (malformed token → 401), `FILE-09` (long filename → 400, no crash), `ISO-04` (isolation holds across multiple records per publisher), `ISO-03` and `ISO-05` (already passing, unaffected).
+
+### 10.5 Eliminating the last SKIP: BC-INT-08 made real (2026-09-14, same-day follow-up)
+
+On request ("don't leave any test skipped if it can be tested"), `BC-INT-08` (pending-transaction handling) was converted from a skip into a real, executed test. The normal `register()` flow can never produce a pending transaction to test against — it calls `wait_for_receipt()` synchronously and only writes to Postgres after the transaction is mined, so under normal operation no pending tx is ever persisted. The test now:
+
+1. Temporarily restarts the Anvil container with `--block-time 6` (interval mining instead of instant) via `docker compose run --use-aliases --service-ports`, keeping the same `anvil` network alias so the backend's `http://anvil:8545` hostname still resolves.
+2. Fires a real transaction directly via `BlockchainConnector.create_transaction()` — deliberately *not* calling `wait_for_receipt()` — so it stays genuinely unmined for the block-time window.
+3. Inserts a matching `registry_records` row directly into Postgres (bypassing `register()`, which is exactly the codepath that would refuse to do this).
+4. Hits the real `GET /verify/{hash}` endpoint while the transaction is still unmined.
+5. Restores Anvil to its normal instant-mining command afterward, confirmed by rerunning `BC-INT-01`/`BC-INT-02/03` immediately after with no interference.
+
+**Result**: got the real `400 "Transaction is still pending"` from the live backend (not mocked), then confirmed the same hash resolves to `200 valid:true` once the transaction is actually mined a few seconds later — closing the loop for real.
+
+**Final tally after this fix**: rerunning the entire 53-test suite fresh (`docker compose down -v` → rebuilt from scratch) gives **48 PASS / 5 FAIL / 0 SKIP** — no test in this suite is skipped any more. The remaining 5 FAILs are exactly the Finding-2-rooted set from §10.3/§10.4 (`DB-INT-07`, `KC-INT-02`, `KC-INT-03`, `KC-INT-04`, and the residual `ISO-01/02`), which cannot be resolved by application code alone.
 
 ### 10.3 Important caveat: the IDOR fix is correct but currently neutralized by Finding 2
 
