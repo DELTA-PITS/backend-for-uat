@@ -364,3 +364,46 @@ See §5.4 (T1-T4). All changes are in `tests/locust/locustfiles/register.py` and
 - **No unit tests were added** — the 94 backend / 30 frontend unit counts from the master export are unchanged by this pass.
 
 **No application code was modified in this reconciliation pass** — only the `FILE-09` test's assertion. All 8 FAILs above remain open findings pending a separate, explicitly-scoped fix pass.
+
+---
+
+## 10. Code Fixes Applied (2026-09-14, separate follow-up pass)
+
+Of the 8 FAILs in §9, 3 are application-code bugs fixable in this repo. They were fixed and the fix verified against a freshly rebuilt local stack (same procedure as §2). The other 5 (`DB-INT-07`, `KC-INT-02`, `KC-INT-03`, `KC-INT-04`, and — see the important caveat below — the isolation test) all trace back to Finding 2 (§3), which is a Keycloak realm/client **configuration** gap, not something fixable by editing this repo's application code.
+
+### 10.1 Fixes
+
+| Finding | File | Change |
+|---|---|---|
+| Finding 1 — IDOR (`GET /records` returns every publisher's records) | `src/trustmark/api/v1/documents.py::list_records()` | Added `.filter_by(issuer_id=principal.sub)` to the query, before `.order_by(...)`. |
+| Finding 3 — malformed bearer → `500` instead of `401` | `src/trustmark/infra/auth/keycloak.py::KeycloakVerifier.verify()` | Wrapped `jwt.get_unverified_header(token)` in try/except for `JWTError`, raising `HTTPException(401, "Malformed token")` instead of letting it propagate uncaught. |
+| New finding — filename > 255 chars → unhandled `500` | `src/trustmark/api/v1/documents.py::register()` | Added `_validate_filename()`, called before `_read_upload()`, rejecting filenames longer than 255 chars (matching the `original_filename` column's `VARCHAR(255)`) with a clean `400`. |
+
+Corresponding unit tests updated to assert the fixed (correct) behaviour instead of the previously-documented bug, per each test's own docstring note that it should be updated once fixed:
+- `tests/trustmark/api/test_documents.py::TestListRecords` — renamed `test_records_from_two_issuers_visible_to_one_principal` to `test_records_filtered_to_requesting_principal`; now asserts `filter_by(issuer_id=...)` is called and only the requesting principal's records are returned. The shared `mock_db()` helper was updated to wire the new `.filter_by().order_by().all()` chain.
+- `tests/trustmark/infra/auth/test_keycloak.py::TestVerify` — renamed `test_verify_malformed_token_is_unhandled` to `test_verify_malformed_token_returns_401`; now asserts `HTTPException(401)` instead of an uncaught `JWTError`.
+
+All 94 backend unit tests pass after these changes (verified: `pytest tests/trustmark -v` → 94 passed).
+
+### 10.2 Live verification against a fresh local stack
+
+Full Pass 5 integration suite (53 tests) rerun end-to-end after the fixes, against a newly rebuilt Docker image and freshly recreated Postgres/Keycloak/Anvil/test-accounts:
+
+**Result: 47 PASS / 5 FAIL / 1 SKIP** (up from 44/8/1 before the fixes).
+
+Confirmed fixed (now PASS): `KC-INT-08` (malformed token → 401), `FILE-09` (long filename → 400, no crash), `ISO-04` (isolation holds across multiple records per publisher), `ISO-03` and `ISO-05` (already passing, unaffected).
+
+### 10.3 Important caveat: the IDOR fix is correct but currently neutralized by Finding 2
+
+`test_iso_01_and_02_cross_publisher_visibility` **still FAILS** after the IDOR fix — but not because the fix is wrong. Because Finding 2 (§3) means `principal.sub` is empty (`""`) for **every** publisher in this environment (local and production), the new filter `WHERE issuer_id = principal.sub` becomes `WHERE issuer_id = ''` for both Publisher A and Publisher B — and since every record ever registered by anyone also has `issuer_id=''` (same root cause), the filter matches everyone's records for everyone, exactly reproducing the pre-fix leak as an emergent side effect of a *different*, unrelated bug.
+
+This was confirmed directly: `ISO-04` (multi-record isolation) now PASSES because that test's mock/local setup happens to use non-empty synthetic issuer_id values from earlier `DB-INT-03`/`DB-INT-04` raw-SQL test rows still in the table, which the filter correctly excludes — but the two REAL Keycloak-authenticated publishers (A and B) both still get `issuer_id=''` and so still see each other's records.
+
+**Implication for the paper and for remediation**: the IDOR code fix (§10.1) is real, correct, and necessary — but Finding 1 will not be genuinely resolved in production until Finding 2 (the missing `sub` claim, root-caused in §3 to the realm export's empty `clientScopes`) is *also* fixed. Fixing Finding 2 requires a Keycloak realm/client configuration change (adding a protocol mapper), not an application code change, and — because it changes the identity claim written into every future publisher's registry records — it affects production's authentication configuration and was treated as an intentionally separate decision, not bundled into this code-fix pass.
+
+### 10.4 Not fixed in this pass, and why
+
+- **Finding 2** (missing `sub` claim, and everything downstream of it: `DB-INT-07`, `KC-INT-02/03/04`, and the residual `ISO-01/02` failure per §10.3) — requires a Keycloak configuration change (add an `oidc-usermodel-property-mapper` for `sub`, confirmed to work in the §3 experiment), not a code change. Left for a separate, explicitly-scoped decision given it touches production identity infrastructure.
+- **DUP-4-style race condition** — not a confirmed bug (see §8), nothing to fix.
+- **`TEST_MODE` auth-bypass mechanism** — a design/deployment-hardening question (should this code path exist in a production image at all), not addressed in this pass; flagged in §8/§5.3 as R6.
+- **No PDF magic-byte/content validation** — a larger scope-of-work decision (what should be accepted, how strict), not addressed in this pass.

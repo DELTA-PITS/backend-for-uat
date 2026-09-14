@@ -273,24 +273,16 @@ class TestVerify:
                 verifier.verify(token)
         assert exc.value.status_code == 401  # the broad `except Exception` catches this
 
-    def test_verify_malformed_token_is_unhandled(self, verifier):
-        """Reproduces Finding 3 / AUTH-2 (2026-09-09 live QA pass) in
-        isolation: `jwt.get_unverified_header()` is called before any
-        try/except in verify() is in scope. A string that isn't JWT-shaped
-        at all - exactly what a probing client would send - raises
-        JWTError straight out of verify(), uncaught. In the real FastAPI
-        app this becomes an unhandled-exception 500, not the 401 every
-        other bad-token case in this file correctly returns.
-
-        This test currently PASSES because it asserts the *current* (buggy)
-        behaviour. Once verify() wraps `jwt.get_unverified_header` in a
-        try/except like it already does for `jwt.decode`, this test should
-        be updated to assert `HTTPException` with status 401 instead - at
-        which point its failure against unfixed code is exactly the
-        regression guard it's meant to be.
-        """
-        with pytest.raises(JWTError):
+    def test_verify_malformed_token_returns_401(self, verifier):
+        """Regression guard for Finding 3 / AUTH-2 (2026-09-09 live QA pass,
+        reconfirmed live in Pass 5 on 2026-09-14): `jwt.get_unverified_header()`
+        is now wrapped in try/except in verify(), so a string that isn't
+        JWT-shaped at all - exactly what a probing client would send -
+        returns a controlled 401 instead of propagating JWTError uncaught
+        (which the real FastAPI app turned into an unhandled 500)."""
+        with pytest.raises(HTTPException) as exc:
             verifier.verify("this-is-not-a-jwt-at-all")
+        assert exc.value.status_code == 401
 
 
 # ---------------------------------------------------------------------------

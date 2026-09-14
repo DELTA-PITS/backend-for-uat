@@ -24,6 +24,17 @@ def _max_upload_bytes() -> int:
     return int(settings.get("MAX_UPLOAD_BYTES", 20 * 1024 * 1024))
 
 
+MAX_FILENAME_LENGTH = 255  # matches registry_records.original_filename column (VARCHAR(255))
+
+
+def _validate_filename(filename: str | None) -> None:
+    if filename and len(filename) > MAX_FILENAME_LENGTH:
+        raise HTTPException(
+            400,
+            detail=f"Filename exceeds the maximum length of {MAX_FILENAME_LENGTH} characters",
+        )
+
+
 async def _read_upload(file: UploadFile) -> bytes:
     content = await file.read()
     if not content:
@@ -51,6 +62,7 @@ async def register(
     principal: Principal = Depends(require_roles("publisher")),
     db: Session = Depends(get_db),
 ):
+    _validate_filename(file.filename)
     content = await _read_upload(file)
     content_hash = generate_hash_from_bytes(content)
 
@@ -81,7 +93,12 @@ def list_records(
     principal: Principal = Depends(require_roles("publisher")),
     db: Session = Depends(get_db),
 ):
-    records = db.query(RegistryRecord).order_by(RegistryRecord.created_at.desc()).all()
+    records = (
+        db.query(RegistryRecord)
+        .filter_by(issuer_id=principal.sub)
+        .order_by(RegistryRecord.created_at.desc())
+        .all()
+    )
     return {"records": [_record_payload(record) for record in records]}
 
 

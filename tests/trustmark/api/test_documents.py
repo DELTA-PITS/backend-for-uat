@@ -6,13 +6,17 @@ Purpose: documents.py is the other module (alongside keycloak.py) behind the
 findings from the 2026-09-09 live QA pass. Two tests here in particular are
 load-bearing:
 
-  - TestListRecords::test_records_from_two_issuers_visible_to_one_principal
-    reproduces Finding 1 (the /api/v1/records IDOR) deterministically, with
-    a two-line mock DB, in milliseconds - no second Keycloak account needed.
+  - TestListRecords::test_records_filtered_to_requesting_principal is the
+    regression guard for Finding 1 (the /api/v1/records IDOR), fixed in
+    Pass 5 (2026-09-14) by filtering on principal.sub.
 
   - TestRegister::test_principal_sub_empty_writes_empty_issuer_id
     reproduces Finding 2's effect at the exact write site, independent of
     whether the live Keycloak token has a `sub` claim on any given day.
+    Finding 2 itself is NOT fixed by Pass 5's code changes - its root cause
+    is a Keycloak realm/client provisioning gap (missing `sub` protocol
+    mapper), not application code - see pass-5-integration-reproducibility.md
+    §3.
 
 Run with:
     /tmp/pits-unit-venv/bin/python -m pytest tests/trustmark/api/test_documents.py -v
@@ -68,12 +72,14 @@ def make_record(**overrides) -> RegistryRecord:
 
 def mock_db(first_return=None, all_return=None):
     """Builds a MagicMock standing in for the SQLAlchemy Session, wired so
-    `db.query(...).filter_by(...).first()` and
-    `db.query(...).order_by(...).all()` return what the test wants."""
+    `db.query(...).filter_by(...).first()` (used by register()/verify_*())
+    and `db.query(...).filter_by(...).order_by(...).all()` (used by
+    list_records(), which filters by issuer_id since the Pass 5 IDOR fix)
+    both return what the test wants."""
     db = MagicMock()
     query = db.query.return_value
     query.filter_by.return_value.first.return_value = first_return
-    query.order_by.return_value.all.return_value = all_return or []
+    query.filter_by.return_value.order_by.return_value.all.return_value = all_return or []
     return db
 
 
@@ -270,29 +276,24 @@ class TestRegister:
 
 
 class TestListRecords:
-    def test_records_from_two_issuers_visible_to_one_principal(self):
-        """THE test that proves Finding 1 without a live server or a second
-        Keycloak account. Two records belonging to two different issuers
-        sit in the mock DB; list_records() is called once, as one
-        authenticated principal (issuer-A). If the response contains
-        issuer-B's record too, the endpoint has no per-publisher filter -
-        which is exactly documents.py's current, unfiltered
-        `db.query(RegistryRecord).order_by(...).all()`."""
+    def test_records_filtered_to_requesting_principal(self):
+        """Regression guard for Finding 1 (IDOR), fixed in Pass 5
+        (2026-09-14): list_records() now filters by principal.sub before
+        ordering, via `db.query(RegistryRecord).filter_by(issuer_id=...)`.
+        The mock DB only returns issuer-A's record from that filtered
+        chain (as a real DB's WHERE clause would), and this test confirms
+        both that the response only contains it AND that filter_by() was
+        called with the requesting principal's own sub - not left
+        unfiltered."""
         record_a = make_record(id="rec-A", issuer_id="issuer-A", original_filename="a.pdf")
-        record_b = make_record(id="rec-B", issuer_id="issuer-B", original_filename="b-private.pdf")
-        db = mock_db(all_return=[record_b, record_a])
+        db = mock_db(all_return=[record_a])
         principal = make_principal(sub="issuer-A")
 
         result = documents.list_records(principal=principal, db=db)
 
+        db.query.return_value.filter_by.assert_called_once_with(issuer_id="issuer-A")
         returned_issuers = {r["issuer_id"] for r in result["records"]}
-        assert returned_issuers == {"issuer-A", "issuer-B"}, (
-            "list_records() returned records from an issuer other than the "
-            "requesting principal - this IS the bug (Finding 1), not a test "
-            "failure to fix. A correct implementation filters by "
-            "principal.sub and this assertion would need updating to "
-            "returned_issuers == {'issuer-A'}."
-        )
+        assert returned_issuers == {"issuer-A"}
 
     def test_empty_table_returns_empty_list(self):
         db = mock_db(all_return=[])
@@ -307,7 +308,7 @@ class TestListRecords:
         test against a real (even if in-memory) database."""
         db = mock_db(all_return=[])
         documents.list_records(principal=make_principal(), db=db)
-        db.query.return_value.order_by.assert_called_once()
+        db.query.return_value.filter_by.return_value.order_by.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

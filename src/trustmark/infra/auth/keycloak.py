@@ -111,7 +111,12 @@ class KeycloakVerifier:
         return self._jwks
 
     def verify(self, token: str) -> dict[str, Any]:
-        headers = jwt.get_unverified_header(token)
+        try:
+            headers = jwt.get_unverified_header(token)
+        except JWTError as e:
+            logger.info("Keycloak token malformed (cannot parse header): %s", e)
+            raise HTTPException(status_code=401, detail="Malformed token")
+
         kid = headers.get("kid")
         if not kid:
             raise HTTPException(status_code=401, detail="Token missing kid header")
