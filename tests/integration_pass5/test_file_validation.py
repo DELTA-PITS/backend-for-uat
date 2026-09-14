@@ -87,16 +87,30 @@ class TestFileValidation:
         assert resp.json()["filename"]
 
     def test_file_09_very_long_filename(self, token_a):
+        """original_filename column is String(255) - a filename over 255
+        chars exercises the DB column boundary. Desired/correct behaviour is
+        either a clean 4xx rejection or silent truncation - NOT an unhandled
+        server crash. This assertion was missing entirely in the first Pass 5
+        run (the test only printed the status and always reported PASSED
+        regardless of outcome, which is why the written report's "FAIL - NEW
+        FINDING" narrative for this ID never showed up in the actual pytest
+        FAIL count - a self-inconsistency caught and fixed here, not a
+        change in the underlying application bug)."""
         long_name = "a" * 500 + ".pdf"
         content = unique_pdf_bytes("FILE-09")
         resp = register(token_a, content, filename=long_name)
         print(f"FILE-09: status={resp.status_code}, filename_len={len(long_name)}")
-        # original_filename column is String(255) - a filename over 255 chars
-        # exercises the DB column boundary.
         if resp.status_code == 200:
             print(f"FILE-09: filename stored/returned as len={len(resp.json().get('filename') or '')}")
         else:
             print(f"FILE-09: rejected: {resp.text[:300]}")
+        assert resp.status_code != 500, (
+            f"A filename of {len(long_name)} chars caused an unhandled 500 "
+            f"Internal Server Error (Postgres column-length violation "
+            f"surfacing raw - original_filename is VARCHAR(255) with no "
+            f"application-level length validation). Expected a clean 4xx or "
+            f"silent truncation, not a crash. Got: {resp.text[:300]}"
+        )
 
     def test_file_10_path_like_filename(self, token_a):
         content = unique_pdf_bytes("FILE-10")

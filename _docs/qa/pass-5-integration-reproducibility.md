@@ -18,7 +18,7 @@ No new unit tests were added to inflate the existing 94 (backend) / 30 (frontend
 - **Anvil is a non-persistent local dev chain**: a container restart loses all transaction history (confirmed by direct experiment). This is an environment/prototype limitation, explicitly not a claim about any real blockchain network's durability.
 - **Malformed bearer token → 500, not 401, reconfirmed live** (previously a unit-mocked-only finding; now confirmed against the real `KeycloakVerifier.verify()` path with a real HTTP round trip).
 - Locust load-test code had **two real, previously undiagnosed bugs** (`is not str` identity comparisons that always evaluate true, and a hardcoded "must equal empty string" expectation baked around the issuer_id bug) plus a **missing Authorization header** in `register.py` that made 100% of historical `/register` load-test traffic fail outright unless the target was running with `TEST_MODE=True` (the auth-bypass mechanism documented in the master export). All three are fixed here, and 3 fresh 60-second runs were captured against the local stack. These numbers are **not** compared 1:1 against the historical 8,880/8,245/8,165 figures — the historical runs' target configuration (TEST_MODE on/off, auth wiring) cannot be determined from the numbers alone, and this pass explicitly does not claim they are the same environment.
-- **Test counts, exact**: 53 new integration tests written for this pass. 45 PASS, 7 FAIL (all documenting real, reproduced findings — not test defects), 1 SKIP (Anvil pending-tx state not reproducible in this compose config).
+- **Test counts, exact**: 53 new integration tests written for this pass. **44 PASS, 8 FAIL (all documenting real, reproduced findings — not test defects), 1 SKIP** (Anvil pending-tx state not reproducible in this compose config). *(Corrected 2026-09-14 after a second, independent rerun requested for verification: the first published version of this report said 45/7/1, which undercounted by one FAIL — `FILE-09` was narratively documented as a finding but its test had no assertion, so pytest reported it as PASS regardless of the server's actual response; the assertion was added and the whole suite rerun from a fresh stack to confirm. See §9 for the full reconciliation.)*
 
 ---
 
@@ -154,8 +154,7 @@ Evidence level for every test in this section: **INTEGRATION-REAL-LOCAL** unless
 
 | ID | Objective | Status | Finding |
 |---|---|---|---|
-| ISO-01 | Publisher A's `GET /records` shows only A's records | **FAIL** | **IDOR CONFIRMED with live two-account evidence.** A's response included B's record (`publisher-b-secret.pdf`). |
-| ISO-02 | Publisher B's `GET /records` shows only B's records | **FAIL** | Same — B's response included A's record. |
+| ISO-01 + ISO-02 (one pytest test, `test_iso_01_and_02_cross_publisher_visibility`, two assertions) | Publisher A's `GET /records` shows only A's records; Publisher B's shows only B's | **FAIL** (counts as **1** in the pytest-level tally in §9, not 2 — see note below) | **IDOR CONFIRMED with live two-account evidence.** A's response included B's record (`publisher-b-secret.pdf`) AND B's response included A's record. |
 | ISO-03 | Exact fields of the leaked cross-publisher record | PASS (documents the leak) | All 6 fields exposed: `record_id, content_hash, filename, transaction_hash, created_at, issuer_id`. Full leaked record captured in test output. |
 | ISO-04 | Isolation failure persists across multiple records per publisher | **FAIL** | A's listing spanned 3 distinct `issuer_id` values after both publishers registered multiple documents (confirms it's a whole-table leak, not a one-off). |
 | ISO-05 | No separate single-record endpoint exists to probe a second IDOR vector | PASS (N/A confirmed) | `GET /records/{id}` → 404; not a route in this API. |
@@ -201,7 +200,7 @@ This is the highest-value evidence in this pass for the paper: the entire chain 
 | FILE-06 | Exactly at 20 MB limit | PASS | Accepted, 200. |
 | FILE-07 | 1 byte over 20 MB limit | PASS | Correctly rejected, 413. |
 | FILE-08 | Unicode filename | PASS | Accepted, filename preserved. |
-| FILE-09 | Very long filename (504 chars) | **FAIL — NEW FINDING** | `500 Internal Server Error`. `registry_records.original_filename` is `VARCHAR(255)`; nothing in `documents.py::register()` validates filename length before the DB write, so Postgres itself raises (`StringDataRightTruncation` or equivalent), which propagates unhandled. |
+| FILE-09 | Very long filename (504 chars) | **FAIL — NEW FINDING** (fixed to genuinely assert 2026-09-14; originally had no assertion and always reported PASS regardless of the server's response — see §9 reconciliation) | `500 Internal Server Error`. `registry_records.original_filename` is `VARCHAR(255)`; nothing in `documents.py::register()` validates filename length before the DB write, so Postgres itself raises (`StringDataRightTruncation` or equivalent), which propagates unhandled. |
 | FILE-10 | Path-traversal-style filename (`../../etc/passwd.pdf`) | PASS | Accepted, 200, stored as a literal string. No filesystem effect — confirms the separately-known finding that uploaded files are never written to disk at all (hashed in memory only), so path-traversal via filename has no filesystem consequence here, only a display/DB-content concern. |
 | FILE-11 | Same bytes, different filename | PASS | Second request correctly resolves to `already_existed:true`, same `record_id`; filename from the *first* registration is what's returned (content identity, not filename, drives dedup — as designed). |
 | FILE-12 | One-byte-different PDF | PASS | Distinct hashes, distinct records, as expected. |
@@ -259,6 +258,7 @@ This is the highest-value evidence in this pass for the paper: the entire chain 
 | T2 | `tests/locust/locustfiles/verify.py` | `response_body["issuer_id"] != ""` encoded the *known bug* (Finding 2) as the *expected/correct* value — meaning a hypothetical fix to Finding 2 would have made this locustfile's tests fail, backwards from intent. | Changed to assert issuer_id is **non-empty** (the intended-correct behaviour); this now fails while Finding 2 is unfixed, which is accurate given `--DO NOT change expected result merely to match current behaviour--`. |
 | T3 | `tests/locust/locustfiles/register.py` | No `Authorization` header sent at all — guaranteed 401 on any backend enforcing real auth (`TEST_MODE=False`, the current default everywhere per `docker/.env`/`.env.example`/`.env.save`). | Added `on_start()` fetching a real Keycloak token for `publisher-a`, attached as a Bearer header on both tasks. |
 | T4 | `tests/locust/locustfiles/verify.py` | `verify_not_stored` task's hardcoded hash literal (`"ThisIsNotAStoredHash"`) is not a 64-char hex string, so the backend's own format validation rejects it with 400 before the "not registered" branch is ever reached — a guaranteed, permanent failure unrelated to server load or correctness. | Replaced with a well-formed, never-registered 64-hex-char hash (`"ff"*32`). |
+| T5 | `tests/integration_pass5/test_file_validation.py` | `test_file_09_very_long_filename` had no assertion at all — it printed the response status/body and always reported PASS regardless of what the server did, even though the narrative in §4.6 documented it as a live FAIL/finding (unhandled 500). This is exactly the kind of self-inconsistency that produced the 45/7/1 vs. corrected 44/8/1 count discrepancy caught during the 2026-09-14 verification rerun (see §9). | Added `assert resp.status_code != 500` with a message explaining the expected clean 4xx/truncation vs. the actual crash. |
 
 All four are documented here with the exact original code (captured before editing) so the change is auditable; none of them touch application code, only the test/benchmark scripts.
 
@@ -348,9 +348,19 @@ See §5.4 (T1-T4). All changes are in `tests/locust/locustfiles/register.py` and
 
 ## 9. Exact Final Test Counts
 
+**Reconciliation note (2026-09-14)**: the first published version of this report said 45 PASS / 7 FAIL / 1 SKIP. On request, the entire suite was rebuilt from a fresh disposable stack and rerun independently to verify that number. Two discrepancies were found and corrected, both in this report/test-suite's own bookkeeping — **neither changes any application-level finding**:
+
+1. `ISO-01` and `ISO-02` are documented in §4.3 as two named requirement IDs, but they are implemented as **one** pytest test function (`test_iso_01_and_02_cross_publisher_visibility`, two assertions). Counted at the pytest execution level (the correct level for "did this actually run and pass/fail"), that's 1 FAIL, not 2.
+2. `FILE-09` (very long filename) was narratively documented as "FAIL — NEW FINDING" because the server genuinely returns an unhandled `500`, but the test function itself had **no assertion** — it only printed the status code, so pytest reported PASS unconditionally regardless of what the server actually did. An assertion was added (`assert resp.status_code != 500`) and the fix is included in the commit history for this pass. The server-side bug this test exercises is unchanged; only the test's ability to detect it was fixed.
+
+**Final, independently-reran, ground-truth counts**:
+
 - **New integration tests this pass**: 53
-  - PASS: 45
-  - FAIL (all documenting real, reproduced findings): 7 — DB-INT-07, KC-INT-02, KC-INT-03, KC-INT-04, KC-INT-08, ISO-01/02 (one test, two assertions), ISO-04
+  - **PASS: 44**
+  - **FAIL (all documenting real, reproduced findings, none a test defect): 8** — DB-INT-07, FILE-09, KC-INT-02, KC-INT-03, KC-INT-04, KC-INT-08, `test_iso_01_and_02_cross_publisher_visibility` (covers ISO-01+ISO-02), ISO-04
   - SKIP: 1 — BC-INT-08
-- **Locust runs**: 3 independent 60-second runs, 2,743 / 2,735 / 2,735 total requests respectively (8,213 combined), 285 / 286 / 269 failures respectively (840 combined, 10.2% aggregate) — all attributable to Finding 2, zero unexpected server errors.
+- Every number above comes from an actual, complete `pytest` run against a freshly rebuilt local stack (Postgres/Keycloak/Anvil/backend all recreated from scratch, test accounts recreated), not inferred or carried over from the first run.
+- **Locust runs**: 3 independent 60-second runs, 2,743 / 2,735 / 2,735 total requests respectively (8,213 combined), 285 / 286 / 269 failures respectively (840 combined, 10.2% aggregate) — all attributable to Finding 2, zero unexpected server errors. (Not rerun during this reconciliation pass — no code change affects Locust's target behaviour.)
 - **No unit tests were added** — the 94 backend / 30 frontend unit counts from the master export are unchanged by this pass.
+
+**No application code was modified in this reconciliation pass** — only the `FILE-09` test's assertion. All 8 FAILs above remain open findings pending a separate, explicitly-scoped fix pass.
