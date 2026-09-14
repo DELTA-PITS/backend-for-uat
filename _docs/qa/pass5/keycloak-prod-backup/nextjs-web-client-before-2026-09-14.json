@@ -1,0 +1,76 @@
+{
+    "id": "a3098ba0-40bd-4d21-a5d4-04af8de6a2c6",
+    "clientId": "nextjs-web",
+    "name": "PITS Frontend",
+    "description": "",
+    "rootUrl": "",
+    "adminUrl": "",
+    "baseUrl": "",
+    "surrogateAuthRequired": false,
+    "enabled": true,
+    "alwaysDisplayInConsole": false,
+    "clientAuthenticatorType": "client-secret",
+    "secret": "pits-local-client-secret",
+    "redirectUris": [
+        "https://pits-ui.pangkalandata.id/api/auth/callback/keycloak"
+    ],
+    "webOrigins": [
+        "https://pits-ui.pangkalandata.id"
+    ],
+    "notBefore": 0,
+    "bearerOnly": false,
+    "consentRequired": false,
+    "standardFlowEnabled": true,
+    "implicitFlowEnabled": false,
+    "directAccessGrantsEnabled": true,
+    "serviceAccountsEnabled": false,
+    "publicClient": false,
+    "frontchannelLogout": false,
+    "protocol": "openid-connect",
+    "attributes": {
+        "logout.confirmation.enabled": "false",
+        "realm_client": "false",
+        "oidc.ciba.grant.enabled": "false",
+        "backchannel.logout.session.required": "false",
+        "oauth2.jwt.authorization.grant.enabled": "false",
+        "standard.token.exchange.enabled": "false",
+        "post.logout.redirect.uris": "https://pits-ui.pangkalandata.id/api/auth/logout",
+        "display.on.consent.screen": "false",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "backchannel.logout.revoke.offline.tokens": "false",
+        "dpop.bound.access.tokens": "false"
+    },
+    "authenticationFlowBindingOverrides": {},
+    "fullScopeAllowed": true,
+    "nodeReRegistrationTimeout": -1,
+    "protocolMappers": [
+        {
+            "id": "ffcfe15a-62f4-4a1b-a183-913991f0177d",
+            "name": "identity-provider",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-usersessionmodel-note-mapper",
+            "consentRequired": false,
+            "config": {
+                "user.session.note": "identity_provider",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "identity_provider",
+                "jsonType.label": "String",
+                "userinfo.token.claim": "true"
+            }
+        }
+    ],
+    "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "email"
+    ],
+    "optionalClientScopes": [],
+    "access": {
+        "view": true,
+        "configure": true,
+        "manage": true
+    }
+}

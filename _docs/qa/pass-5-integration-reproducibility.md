@@ -420,3 +420,13 @@ This was confirmed directly: `ISO-04` (multi-record isolation) now PASSES becaus
 - **DUP-4-style race condition** — not a confirmed bug (see §8), nothing to fix.
 - **`TEST_MODE` auth-bypass mechanism** — a design/deployment-hardening question (should this code path exist in a production image at all), not addressed in this pass; flagged in §8/§5.3 as R6.
 - **No PDF magic-byte/content validation** — a larger scope-of-work decision (what should be accepted, how strict), not addressed in this pass.
+
+---
+
+## 11. Addendum (2026-09-14, same day): Finding 2 fixed too — full post-fix results
+
+Finding 2 was fixed on explicit user confirmation, in both places it needed fixing:
+- **Production Keycloak** (`keycloak.pangkalandata.id`, realm `nextjs-kc`, client `nextjs-web`): added the same `sub` protocol mapper live via the admin API. Backup of the client config before the change: `_docs/qa/pass5/keycloak-prod-backup/nextjs-web-client-before-2026-09-14.json`.
+- **This repo's `docker/realms/realm-export.json`**: added the identical protocol mapper to the client definition, so every future disposable/local stack built from this repo has the fix by default (this is the actual root cause file from §3 — leaving it unfixed would have kept reproducing Finding 2 in every future local test run even after production was fixed).
+
+Full details, all-green final numbers (53/53), and the complete regression evidence are in `_docs/qa/pits-post-fix-qa-master.md` — not duplicated here to keep this file as the stable before-fix baseline record.
