@@ -87,9 +87,9 @@ Registration and verification process uploaded bytes in memory. The backend does
 
 ## Important proof-of-concept limitations
 
-- The blockchain is a local Anvil development ledger and is reset when its container state is removed.
+- By default the blockchain is a local Anvil development ledger and is reset when its container state is removed. The backend can also anchor to a public EVM chain such as Ethereum Sepolia purely through configuration (`BLOCKCHAIN_CHAIN_ID` is required) — see `_docs/blockchain-environments.md`. Production still runs on Anvil until an official cutover.
 - Default passwords and private keys are for local testing only.
-- Database schema migrations are not included. For a clean stakeholder test, start with a fresh PostgreSQL volume.
+- Schema changes are an explicit, additive step (`python -m trustmark.infra.schema migrate`, see `_docs/blockchain-environments.md`); startup only checks the schema unless `SCHEMA_AUTO_APPLY=true` (local/CI). Take a database dump before migrating a real database.
 - The system proves that uploaded bytes match a registered SHA-256 value and blockchain transaction. It does not establish whether the document content is factually true.
 
 ## Resetting the environment

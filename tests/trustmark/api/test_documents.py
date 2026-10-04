@@ -65,9 +65,29 @@ def make_record(**overrides) -> RegistryRecord:
         original_filename="doc.pdf",
         content_type="application/pdf",
         created_at="2026-09-06T10:00:00+00:00",
+        chain_id=31337,
+        anchor_type="calldata-v1",
+        anchor_status="confirmed",
     )
     defaults.update(overrides)
     return RegistryRecord(**defaults)
+
+
+def make_chain(chain_id: int = 31337, **attrs):
+    """Connector double: submit_anchor -> AnchorSubmission, receipt wait -> confirmed AnchorReceipt."""
+    from trustmark.infra.blockchain_connector import AnchorReceipt, AnchorSubmission
+
+    chain = MagicMock()
+    chain.chain_id = chain_id
+    chain.confirmations = 1
+    chain.submit_anchor.return_value = AnchorSubmission(tx_hash="0xTX", wallet="0x" + "a" * 40, nonce=3, chain_id=chain_id)
+    chain.wait_for_anchor_receipt.return_value = AnchorReceipt(
+        success=True, block_number=123, block_hash="0x" + "9" * 64, gas_used=22000,
+        effective_gas_price=10**9, confirmations=1,
+    )
+    for key, value in attrs.items():
+        setattr(chain, key, value)
+    return chain
 
 
 def mock_db(first_return=None, all_return=None):
@@ -134,9 +154,19 @@ class TestConfigAndUploadHelpers:
     def test_get_blockchain_service_constructs_connector_when_configured(self, monkeypatch):
         monkeypatch.setenv("BLOCKCHAIN_RPC_URL", "http://localhost:8545")
         monkeypatch.setenv("BLOCKCHAIN_PRIVATE_KEY", "0xabc")
+        monkeypatch.setenv("BLOCKCHAIN_CHAIN_ID", "31337")
         with patch(f"{MODULE}.BlockchainConnector") as mock_ctor:
             documents._get_blockchain_service()
-        mock_ctor.assert_called_once_with(rpc_url="http://localhost:8545", private_key="0xabc")
+        config = mock_ctor.from_config.call_args.args[0]
+        assert (config.rpc_url, config.chain_id) == ("http://localhost:8545", 31337)
+
+    def test_get_blockchain_service_missing_chain_id_returns_500(self, monkeypatch):
+        monkeypatch.setenv("BLOCKCHAIN_RPC_URL", "http://localhost:8545")
+        monkeypatch.setenv("BLOCKCHAIN_PRIVATE_KEY", "0xabc")
+        monkeypatch.delenv("BLOCKCHAIN_CHAIN_ID", raising=False)
+        with pytest.raises(HTTPException) as exc:
+            documents._get_blockchain_service()
+        assert exc.value.status_code == 500
 
     def test_read_upload_non_empty_within_limit_returns_bytes(self):
         file = FakeUploadFile(b"hello pdf bytes")
@@ -177,9 +207,7 @@ class TestRegister:
         content = b"%PDF-1.4 unique content A"
         db = mock_db(first_return=None)
         principal = make_principal(sub="issuer-A")
-        chain = MagicMock()
-        chain.create_transaction.return_value = "0xTX1"
-        chain.wait_for_receipt.return_value = 123
+        chain = make_chain()
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):
             result = asyncio.run(
@@ -189,9 +217,11 @@ class TestRegister:
         assert result["stored"] is True
         assert result["already_existed"] is False
         assert result["content_hash"] == hashlib.sha256(content).hexdigest()
-        chain.create_transaction.assert_called_once()
+        assert result["anchor_status"] == "confirmed"
+        assert result["anchor"]["chain_id"] == 31337
+        chain.submit_anchor.assert_called_once()
         db.add.assert_called_once()
-        db.commit.assert_called_once()
+        assert db.commit.call_count == 2  # pending row first, then the confirmation update
 
     def test_duplicate_content_returns_existing_record_no_new_tx(self):
         content = b"%PDF-1.4 already registered"
@@ -207,7 +237,7 @@ class TestRegister:
 
         assert result["already_existed"] is True
         assert result["record_id"] == existing.id
-        chain.create_transaction.assert_not_called()
+        chain.submit_anchor.assert_not_called()
         db.add.assert_not_called()
 
     def test_principal_sub_empty_writes_empty_issuer_id(self):
@@ -218,9 +248,7 @@ class TestRegister:
         content = b"%PDF-1.4 content C"
         db = mock_db(first_return=None)
         principal = make_principal(sub="")  # the production-observed value
-        chain = MagicMock()
-        chain.create_transaction.return_value = "0xTX3"
-        chain.wait_for_receipt.return_value = 1
+        chain = make_chain()
 
         created_records = []
         db.add.side_effect = lambda rec: created_records.append(rec)
@@ -239,8 +267,8 @@ class TestRegister:
         content = b"%PDF-1.4 content D"
         db = mock_db(first_return=None)
         principal = make_principal()
-        chain = MagicMock()
-        chain.create_transaction.side_effect = HTTPException(500, detail="Blockchain connection failed")
+        chain = make_chain()
+        chain.submit_anchor.side_effect = HTTPException(500, detail="Blockchain connection failed")
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):
             with pytest.raises(HTTPException) as exc:
@@ -261,9 +289,7 @@ class TestRegister:
         db = mock_db(first_return=None)
         db.commit.side_effect = RuntimeError("UNIQUE constraint failed: registry_records.content_hash")
         principal = make_principal()
-        chain = MagicMock()
-        chain.create_transaction.return_value = "0xTX5"
-        chain.wait_for_receipt.return_value = 1
+        chain = make_chain()
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):
             with pytest.raises(RuntimeError):
@@ -322,7 +348,7 @@ class TestVerify:
         content_hash = hashlib.sha256(content).hexdigest()
         record = make_record(content_hash=content_hash)
         db = mock_db(first_return=record)
-        chain = MagicMock()
+        chain = make_chain()
         chain.read_transaction_value.return_value = {"value": content_hash, "timestamp": "2026-09-06T00:00:00+00:00"}
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):
@@ -352,7 +378,7 @@ class TestVerify:
         content_hash = hashlib.sha256(content).hexdigest()
         record = make_record(content_hash=content_hash)
         db = mock_db(first_return=record)
-        chain = MagicMock()
+        chain = make_chain()
         chain.read_transaction_value.return_value = {"value": "a-different-hash-entirely", "timestamp": "x"}
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):
@@ -369,7 +395,7 @@ class TestVerify:
         content = b"%PDF-1.4 node is down"
         record = make_record(content_hash=hashlib.sha256(content).hexdigest())
         db = mock_db(first_return=record)
-        chain = MagicMock()
+        chain = make_chain()
         chain.read_transaction_value.side_effect = HTTPException(500, detail="Blockchain connection failed")
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):
@@ -381,7 +407,7 @@ class TestVerify:
         content_hash = "c" * 64
         record = make_record(content_hash=content_hash)
         db = mock_db(first_return=record)
-        chain = MagicMock()
+        chain = make_chain()
         chain.read_transaction_value.return_value = {"value": content_hash, "timestamp": "x"}
 
         with patch(f"{MODULE}._get_blockchain_service", return_value=chain):

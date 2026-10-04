@@ -1,9 +1,16 @@
 import uuid
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import BigInteger, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trustmark.infra.db import Base
+
+LEGACY_LOCAL_CHAIN_ID = 31337
+
+ANCHOR_PENDING = "pending"
+ANCHOR_CONFIRMED = "confirmed"
+ANCHOR_FAILED = "failed"
+ANCHOR_LEGACY_LOCAL = "legacy_local"
 
 
 class RegistryRecord(Base):
@@ -16,3 +23,16 @@ class RegistryRecord(Base):
     original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Anchor metadata. The server defaults describe rows written before chain tracking
+    # existed (all anchored on the local Anvil chain); new rows always set these explicitly.
+    chain_id: Mapped[int] = mapped_column(Integer, nullable=False, server_default=str(LEGACY_LOCAL_CHAIN_ID))
+    anchor_type: Mapped[str] = mapped_column(String(32), nullable=False, server_default="calldata-v1")
+    anchor_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=ANCHOR_LEGACY_LOCAL)
+    anchor_wallet: Mapped[str | None] = mapped_column(String(42), nullable=True)
+    block_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    block_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    gas_used: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    effective_gas_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    submitted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)

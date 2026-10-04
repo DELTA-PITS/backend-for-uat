@@ -3,15 +3,40 @@ import os
 from contextlib import asynccontextmanager
 
 import emoji
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from trustmark.infra.auth.keycloak import Principal, get_current_principal
 import uvicorn
 
 from trustmark.api.v1 import metrics, documents
 from trustmark.infra.commons import get_env_int, settings, project_details
-from trustmark.infra.db import engine, Base
+from trustmark.infra.blockchain_connector import BlockchainConnector, ChainConfig
+from trustmark.infra.db import engine
+from trustmark.infra.schema import check_schema, migrate
 from trustmark.infra.auth.keycloak import require_roles
+
+
+def _check_database_name() -> None:
+    """Optional guard: REQUIRE_DATABASE_NAME pins the database this instance may use, so a
+    rehearsal backend can never start against the production database by misconfiguration."""
+    required = os.getenv("REQUIRE_DATABASE_NAME", "").strip()
+    actual = engine.url.database
+    if required and actual != required:
+        raise RuntimeError(f"REQUIRE_DATABASE_NAME={required!r} but DATABASE_URL points at {actual!r}")
+
+
+def _check_blockchain_chain() -> None:
+    """Fail fast when the chain configuration is invalid or the RPC reports a different chain
+    than BLOCKCHAIN_CHAIN_ID. An unreachable RPC only logs a warning (it is re-checked on use)."""
+    config = ChainConfig.from_env()
+    try:
+        BlockchainConnector.from_config(config).verify_chain()
+    except HTTPException as exc:
+        if exc.detail == "Blockchain connection failed":
+            logging.warning("Blockchain RPC unreachable at startup; chain ID check deferred")
+            return
+        raise RuntimeError(exc.detail) from exc
+    logging.info("Blockchain chain verified: id=%s network=%s", config.chain_id, config.network_name)
 
 
 @asynccontextmanager
@@ -33,7 +58,12 @@ async def lifespan(application: FastAPI):
     print("====== start up==========")
     print(emoji.emojize(":thumbs_up:"))
     logging.info("Starting up")
-    Base.metadata.create_all(bind=engine)
+    _check_database_name()
+    if os.getenv("SCHEMA_AUTO_APPLY", "false").lower() == "true":
+        migrate(engine)
+    else:
+        check_schema(engine)
+    _check_blockchain_chain()
     yield
 
 

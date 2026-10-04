@@ -1,4 +1,5 @@
 # Run tests with: python -m pytest tests/trustmark/infra/test_blockchain_connector.py
+# Transaction building / nonce / fee / receipt / chain-ID behaviour: test_blockchain_anchor.py
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
@@ -48,31 +49,6 @@ class TestBlockchainConnector:
             connector._get_account()
         assert exc_info.value.status_code == 500
         assert "Invalid private key" in exc_info.value.detail
-
-    @patch("trustmark.infra.blockchain_connector.Web3")
-    @patch("trustmark.infra.blockchain_connector.Account")
-    def test_create_transaction_success(self, mock_account, mock_web3, connector):
-        mock_web3_instance = MagicMock()
-        mock_web3_instance.is_connected.return_value = True
-        mock_web3_instance.eth.chain_id = 1
-        mock_web3_instance.eth.get_transaction_count.return_value = 0
-        mock_web3_instance.to_wei.side_effect = lambda x, y: (
-            2000000000 if x == 2 and y == "gwei" else 1000000000
-        )
-
-        # HexBytes handles standard hex strings. "0x1234".hex() evaluating to "1234"
-        mock_web3_instance.eth.send_raw_transaction.return_value = HexBytes("0x1234")
-        mock_web3.return_value = mock_web3_instance
-
-        mock_account_instance = MagicMock()
-        mock_account_instance.address = "0x" + "a" * 40
-        mock_account_instance.sign_transaction.return_value.raw_transaction = (
-            b"signed_tx"
-        )
-        mock_account.from_key.return_value = mock_account_instance
-
-        tx_hash = connector.create_transaction("test value")
-        assert tx_hash == "1234"
 
     @patch("trustmark.infra.blockchain_connector.Web3")
     def test_create_transaction_connection_failure(self, mock_web3, connector):
@@ -195,6 +171,7 @@ class TestBlockchainConnector:
         mock_web3_instance.eth.wait_for_transaction_receipt.return_value = {
             "blockNumber": 99955
         }
+        mock_web3_instance.eth.block_number = 99955
         mock_web3.return_value = mock_web3_instance
 
         receipt = connector.wait_for_receipt("0x1234")
