@@ -36,3 +36,14 @@ class RegistryRecord(Base):
     effective_gas_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     submitted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confirmed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AnchorSignerNonce(Base):
+    """Last nonce handed out per (chain, signer) - a floor against stale pending-nonce reads on public RPC."""
+
+    __tablename__ = "anchor_signer_nonces"
+
+    chain_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    address: Mapped[str] = mapped_column(String(42), primary_key=True)
+    next_nonce: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)

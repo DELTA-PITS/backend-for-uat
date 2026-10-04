@@ -414,3 +414,117 @@ class TestReading:
         eth.tx = self.tx(blockNumber=None)
         with pytest.raises(bc.AnchorPending):
             connector.read_transaction_value("0xab")
+
+
+# --------------------------------------------------------------------------- nonce floor (stale public RPC)
+
+
+class MemoryNonceStore:
+    def __init__(self, floor=None):
+        self.floor, self.puts = floor, []
+
+    def get_floor(self, chain_id, address, ttl_seconds):
+        return self.floor
+
+    def put_next(self, chain_id, address, next_nonce):
+        self.floor = next_nonce
+        self.puts.append(next_nonce)
+
+
+class TestNonceFloor:
+    """Regression for the Phase 2 live finding: right after a broadcast, a load-balanced public RPC kept
+    answering "pending" with the OLD nonce, so the next anchor reused it ("replacement transaction underpriced")."""
+
+    def stale(self, eth):
+        eth.get_transaction_count = lambda address, block="latest": 7  # RPC never advances
+
+    def test_floor_overrides_a_stale_rpc_nonce(self):
+        store = MemoryNonceStore(floor=9)
+        connector, eth = make_connector(nonce_store=store)
+        self.stale(eth)
+        assert connector.submit_anchor(HASH).nonce == 9
+        assert store.puts == [10]
+
+    def test_rpc_nonce_wins_when_ahead_of_the_floor(self):
+        store = MemoryNonceStore(floor=3)
+        connector, eth = make_connector(nonce_store=store)
+        self.stale(eth)
+        assert connector.submit_anchor(HASH).nonce == 7
+        assert store.puts == [8]
+
+    def test_no_floor_means_plain_pending_nonce(self):
+        connector, eth = make_connector(nonce_store=MemoryNonceStore(floor=None))
+        self.stale(eth)
+        assert connector.submit_anchor(HASH).nonce == 7
+
+    def test_failed_broadcast_does_not_advance_the_floor(self):
+        store = MemoryNonceStore(floor=None)
+        connector, eth = make_connector(nonce_store=store)
+        eth.send_error = ValueError("boom")
+        with pytest.raises(HTTPException):
+            connector.submit_anchor(HASH)
+        assert store.puts == []
+
+    def test_sequential_anchors_against_a_stale_rpc_get_consecutive_nonces(self):
+        store = MemoryNonceStore()
+        connector, eth = make_connector(nonce_store=store)
+        self.stale(eth)
+        assert [connector.submit_anchor(HASH).nonce for _ in range(4)] == [7, 8, 9, 10]
+
+    def test_without_a_store_a_stale_rpc_reuses_the_nonce(self):
+        connector, eth = make_connector()
+        self.stale(eth)
+        assert [connector.submit_anchor(HASH).nonce for _ in range(2)] == [7, 7]  # the bug the floor fixes
+
+    def test_concurrent_anchors_against_a_stale_rpc_stay_distinct_with_lock_and_store(self):
+        connector, eth = make_connector(signer_lock=lambda c, a: signer_lock(c, a, engine=sqlite_engine()),
+                                        nonce_store=MemoryNonceStore())
+        self.stale(eth)
+        nonces, errors = [], []
+
+        def run():
+            try:
+                nonces.append(connector.submit_anchor(HASH).nonce)
+            except Exception as exc:  # pragma: no cover
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run) for _ in range(6)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        assert not errors and sorted(nonces) == [7, 8, 9, 10, 11, 12]
+
+
+class TestDbNonceStore:
+    def store(self):
+        from sqlalchemy.pool import StaticPool
+
+        from trustmark.infra.db import Base
+        from trustmark.infra.nonce_lock import DbNonceStore
+        from trustmark.registry import models  # noqa: F401
+        from sqlalchemy import create_engine
+
+        engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        return DbNonceStore(engine), engine
+
+    def test_roundtrip_and_update(self):
+        store, _ = self.store()
+        assert store.get_floor(1, ACCOUNT.address, 120) is None
+        store.put_next(1, ACCOUNT.address, 5)
+        assert store.get_floor(1, ACCOUNT.address.lower(), 120) == 5
+        store.put_next(1, ACCOUNT.address, 6)
+        assert store.get_floor(1, ACCOUNT.address, 120) == 6
+
+    def test_chains_are_independent(self):
+        store, _ = self.store()
+        store.put_next(1, ACCOUNT.address, 5)
+        assert store.get_floor(2, ACCOUNT.address, 120) is None
+
+    def test_floor_expires_so_a_dropped_transaction_cannot_leave_a_permanent_gap(self):
+        from sqlalchemy import text
+
+        store, engine = self.store()
+        store.put_next(1, ACCOUNT.address, 5)
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE anchor_signer_nonces SET updated_at = '2000-01-01 00:00:00'"))
+        assert store.get_floor(1, ACCOUNT.address, 120) is None

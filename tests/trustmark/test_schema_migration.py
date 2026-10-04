@@ -48,7 +48,7 @@ class TestCheckIsReadOnly:
         assert "chain_id" not in {c["name"] for c in __import__("sqlalchemy").inspect(engine).get_columns("registry_records")}
 
     def test_check_reports_missing_table(self):
-        assert schema.missing_schema(sqlite()) == ["registry_records"]
+        assert schema.missing_schema(sqlite()) == ["anchor_signer_nonces", "registry_records"]
 
     def test_check_passes_after_migrate(self):
         engine = legacy_engine()
@@ -146,10 +146,16 @@ class TestSqlFileMatchesModels:
 
     def test_sql_is_idempotent_by_construction(self):
         for statement in schema.migration_statements():
-            if statement.startswith("ALTER TABLE"):
+            if statement.startswith(("ALTER TABLE", "CREATE TABLE")):
                 assert "IF NOT EXISTS" in statement
             else:
                 assert statement.startswith("UPDATE registry_records SET submitted_at = created_at WHERE submitted_at IS NULL")
+
+    def test_nonce_table_sql_mentions_every_model_column(self):
+        table = Base.metadata.tables["anchor_signer_nonces"]
+        create = next(s for s in schema.migration_statements() if s.startswith("CREATE TABLE IF NOT EXISTS anchor_signer_nonces"))
+        for column in table.columns:
+            assert column.name in create
 
 
 class TestRehearsalDatabasePin:

@@ -83,7 +83,7 @@ nullability or defaults drift from the models (SQLite dev/test derives the same 
 - Gas: `eth_estimateGas` + 20 % buffer. Fees: EIP-1559 `maxFeePerGas = 2 × base fee + priority fee`
   (priority from `eth_maxPriorityFeePerGas`, fallback: median of `eth_feeHistory`); legacy `gasPrice` on chains
   without a base fee. A balance pre-check returns 503 instead of an opaque node error.
-- Nonce: `eth_getTransactionCount(addr, "pending")` read, sign and broadcast happen under a PostgreSQL
+- Nonce: the larger of `eth_getTransactionCount(addr, "pending")` and a database-persisted floor (`anchor_signer_nonces`, valid 120 s - public RPC load balancers can return a stale pending nonce right after a broadcast, found live in Phase 2); read, sign and broadcast happen under a PostgreSQL
   transaction-scoped advisory lock keyed by (chain, signer) (process-local lock on SQLite), so concurrent
   registrations cannot reuse a nonce, also across several backend containers on one database.
 - Receipt wait: bounded (`BLOCKCHAIN_RECEIPT_TIMEOUT_SECONDS`); blocking chain calls run in a worker thread so
@@ -104,9 +104,11 @@ when the process runs as `__main__` with `TEST_MODE=true`. The Dockerfile starts
 backend publicly, confirm `TEST_MODE` is `False` in its container (`docker compose exec ... printenv TEST_MODE`)
 and ideally remove the bypass from the production image. Not changed in Phase 1.
 
-## Known limits (Phase 1)
+## Known limits
 
-- Not exercised against a live Postgres (advisory-lock path) or live Sepolia; covered by SQLite + in-process EVM tests.
-- A load-balanced RPC provider can return a lagging `pending` nonce; the lock does not protect against that.
+- Phase 2 (2026-10-04) proved the PostgreSQL migration, advisory lock, nonce floor and a real Sepolia anchor - see
+  `_docs/qa/sepolia-rehearsal/phase2-report.md`. The Anvil-specific Pass 5 suite was NOT run (it is hard-wired to the production ports).
+- The nonce floor expires after 120 s so a dropped transaction cannot leave a permanent nonce gap; a signer that is
+  also used by other software can still collide.
 - A pending record is only re-checked when it is registered again or verified; there is no background confirmer.
 - The `docker-compose.yml` on the production server has drifted from git (see ops handoff); do not copy this file over it.

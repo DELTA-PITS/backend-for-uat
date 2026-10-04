@@ -288,3 +288,64 @@ class TestAdvisoryLockOnPostgres:
         [t.start() for t in threads]
         [t.join() for t in threads]
         assert len(set(eth.sent)) < 8
+
+
+class TestNonceStoreOnPostgres:
+    ADDRESS = "0x" + "cd" * 20
+
+    def test_roundtrip_ttl_and_timestamptz_on_postgres(self, scratch_db):
+        from trustmark.infra.nonce_lock import DbNonceStore
+
+        schema.migrate(scratch_db.engine)
+        store = DbNonceStore(scratch_db.engine)
+        assert store.get_floor(11155111, self.ADDRESS, 120) is None
+        store.put_next(11155111, self.ADDRESS, 41)
+        assert store.get_floor(11155111, self.ADDRESS, 120) == 41
+        store.put_next(11155111, self.ADDRESS, 42)
+        assert store.get_floor(11155111, self.ADDRESS, 120) == 42
+        with scratch_db.engine.begin() as conn:
+            conn.execute(text("UPDATE anchor_signer_nonces SET updated_at = now() - interval '10 minutes'"))
+        assert store.get_floor(11155111, self.ADDRESS, 120) is None
+
+    def test_stale_rpc_plus_postgres_lock_and_store_give_distinct_nonces(self, scratch_db):
+        from eth_account import Account
+        from eth_account.typed_transactions import TypedTransaction
+        from hexbytes import HexBytes
+        from trustmark.infra.nonce_lock import DbNonceStore
+
+        schema.migrate(scratch_db.engine)
+        account = Account.create()
+
+        class Eth:
+            chain_id = 11155111
+            block_number = 1
+            max_priority_fee = 10**9
+            sent = []
+
+            def get_block(self, ident):
+                return {"baseFeePerGas": 10**9}
+
+            def estimate_gas(self, tx):
+                return 22_000
+
+            def get_balance(self, address):
+                return 10**18
+
+            def get_transaction_count(self, address, block="latest"):
+                return 100  # stale: a lagging RPC node that never saw our earlier broadcasts
+
+            def send_raw_transaction(self, raw):
+                self.sent.append(TypedTransaction.from_bytes(HexBytes(raw)).as_dict()["nonce"])
+                return HexBytes("0x" + "cd" * 32)
+
+        eth = Eth()
+        eth.sent = []
+        connector = BlockchainConnector(
+            "http://unused", account.key.hex(), chain_id=11155111,
+            signer_lock=lambda c, a: signer_lock(c, a, engine=scratch_db.engine),
+            nonce_store=DbNonceStore(scratch_db.engine))
+        connector.w3 = SimpleNamespace(eth=eth)
+        threads = [threading.Thread(target=lambda: connector.submit_anchor("ab" * 32)) for _ in range(8)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        assert sorted(eth.sent) == list(range(100, 108))

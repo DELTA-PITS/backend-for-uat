@@ -36,6 +36,23 @@ DEFAULT_CONFIRMATIONS = 1
 
 SignerLock = Callable[[int, str], ContextManager]
 
+# Public RPC providers sit behind load balancers: right after a broadcast, eth_getTransactionCount(addr,
+# "pending") can still be served by a node that has not seen the transaction, so a second anchor from the
+# same signer would reuse the nonce ("replacement transaction underpriced"). The nonce the signer used last is
+# therefore remembered in the database and acts as a floor for the next one - but only for this long: if that
+# transaction was dropped from the mempool the floor must expire, otherwise the gap would stall every later nonce.
+NONCE_FLOOR_TTL_SECONDS = 120
+
+
+class NonceStore:
+    """Persistence of the next nonce per (chain, signer); see trustmark.infra.nonce_lock.DbNonceStore."""
+
+    def get_floor(self, chain_id: int, address: str, ttl_seconds: int) -> int | None:  # pragma: no cover
+        raise NotImplementedError
+
+    def put_next(self, chain_id: int, address: str, next_nonce: int) -> None:  # pragma: no cover
+        raise NotImplementedError
+
 
 class ChainConfigError(HTTPException):
     def __init__(self, detail: str):
@@ -172,6 +189,7 @@ class BlockchainConnector:
         chain_id: int | None = None,
         *,
         signer_lock: SignerLock | None = None,
+        nonce_store: NonceStore | None = None,
         receipt_timeout_seconds: int = DEFAULT_RECEIPT_TIMEOUT_SECONDS,
         rpc_timeout_seconds: int = DEFAULT_RPC_TIMEOUT_SECONDS,
         confirmations: int = DEFAULT_CONFIRMATIONS,
@@ -180,18 +198,22 @@ class BlockchainConnector:
         self.private_key = private_key
         self.chain_id = chain_id
         self.signer_lock = signer_lock
+        self.nonce_store = nonce_store
         self.receipt_timeout_seconds = receipt_timeout_seconds
         self.rpc_timeout_seconds = rpc_timeout_seconds
         self.confirmations = confirmations
         self.w3: Web3 | None = None
 
     @classmethod
-    def from_config(cls, config: ChainConfig, signer_lock: SignerLock | None = None) -> "BlockchainConnector":
+    def from_config(
+        cls, config: ChainConfig, signer_lock: SignerLock | None = None, nonce_store: NonceStore | None = None
+    ) -> "BlockchainConnector":
         return cls(
             rpc_url=config.rpc_url,
             private_key=config.private_key,
             chain_id=config.chain_id,
             signer_lock=signer_lock,
+            nonce_store=nonce_store,
             receipt_timeout_seconds=config.receipt_timeout_seconds,
             confirmations=config.confirmations,
         )
@@ -269,16 +291,25 @@ class BlockchainConnector:
         acct = self._get_account()
         payload_hex = Web3.to_hex(VALUE_PREFIX + value.encode("utf-8"))
 
-        lock = self.signer_lock(self.chain_id or w3.eth.chain_id, acct.address) if self.signer_lock else nullcontext()
+        chain_id = self.chain_id or w3.eth.chain_id
+        lock = self.signer_lock(chain_id, acct.address) if self.signer_lock else nullcontext()
         with lock:
             nonce = w3.eth.get_transaction_count(acct.address, "pending")
+            if self.nonce_store is not None:
+                floor = self.nonce_store.get_floor(chain_id, acct.address, NONCE_FLOOR_TTL_SECONDS)
+                if floor is not None and floor > nonce:
+                    logger.info("RPC pending nonce %s is behind the last used nonce; using %s", nonce, floor)
+                    nonce = floor
             tx = self.build_transaction(w3, acct.address, payload_hex, nonce)
             signed = acct.sign_transaction(tx)
             try:
                 tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
             except Exception as exc:
-                logger.error("Anchor broadcast failed (%s) for wallet %s", type(exc).__name__, acct.address)
+                logger.error("Anchor broadcast failed (%s: %s) for wallet %s nonce %s", type(exc).__name__,
+                             str(exc)[:200], acct.address, nonce)
                 raise AnchorBroadcastFailed() from exc
+            if self.nonce_store is not None:
+                self.nonce_store.put_next(chain_id, acct.address, nonce + 1)
 
         return AnchorSubmission(tx_hash=tx_hash.hex(), wallet=acct.address, nonce=nonce, chain_id=self.chain_id)
 

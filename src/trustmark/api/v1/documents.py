@@ -19,7 +19,7 @@ from trustmark.infra.blockchain_connector import (
 from trustmark.infra.commons import settings
 from trustmark.infra.db import get_db
 from trustmark.infra.hash_engine import generate_hash_from_bytes
-from trustmark.infra.nonce_lock import signer_lock
+from trustmark.infra.nonce_lock import DbNonceStore, signer_lock
 from trustmark.registry.models import (
     ANCHOR_FAILED,
     ANCHOR_PENDING,
@@ -39,7 +39,9 @@ router_verify = APIRouter()
 
 
 def _get_blockchain_service() -> BlockchainConnector:
-    return BlockchainConnector.from_config(ChainConfig.from_env(), signer_lock=signer_lock)
+    return BlockchainConnector.from_config(
+        ChainConfig.from_env(), signer_lock=signer_lock, nonce_store=DbNonceStore()
+    )
 
 
 def _chain_config_or_none() -> ChainConfig | None:
