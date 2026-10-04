@@ -56,3 +56,15 @@ UI, API health and Keycloak realm 200; production containers unchanged (same IDs
 Pre-existing, unrelated: 3 of 57 production records (created 2026-09-06 18:34-18:47, before the Anvil container was recreated at 19:00)
 point at transactions that no longer exist on Anvil, so the old production verify returns HTTP 500 for them (54/57 verify 200).
 Under the new code these report `verification_status: transaction_not_found`.
+
+## Addendum 2026-10-04 (evening) - server hang, recovery, legacy re-anchoring, Anvil persistence
+- A frontend image build run on the 4 GB host coincided with a full hang (SSH/HTTPS/console unresponsive for ~3.5 h); recovered by a portal
+  reboot. `docker` and `nginx` are disabled at boot on that host, so every service had to be started by hand after the reboot.
+  Anvil is in-memory, so the reboot reset the chain to block 0: the 57 records in `tdb` can no longer be verified through the production
+  backend (data in Postgres is intact).
+- **Legacy re-anchoring**: `tools/reanchor_legacy.py` copies the 57 records from `tdb` (read-only) into `trustmark_sepolia` and anchors each
+  SHA-256 on Sepolia. Original id/filename/issuer/`created_at` are preserved; `anchor_type = calldata-v1-reanchored` marks them because the
+  on-chain timestamp is the re-anchoring time. Production `tdb` is not modified. Verified through `/sepolia-api/` only.
+- **Anvil persistence** (UAT only): production compose now starts Anvil with `--state /data/anvil-state.json --state-interval 10` and a bind
+  mount `/home/hamka/pits/anvil-data` (backup of the previous compose: `backup-20261004-sepolia/docker-compose.yml.server.before-anvil-persist`).
+  Tested: graceful restart and SIGKILL both keep the chain height. Up to 10 s of blocks can be lost on a crash; it is still a local chain.
