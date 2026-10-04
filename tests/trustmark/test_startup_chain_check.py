@@ -44,3 +44,11 @@ def test_missing_chain_id_stops_startup(monkeypatch):
     monkeypatch.delenv("BLOCKCHAIN_CHAIN_ID")
     with pytest.raises(ChainConfigError):
         main._check_blockchain_chain()
+
+
+def test_rpc_url_bearing_loggers_are_not_at_debug():
+    """DEBUG records from web3/urllib3 include the full RPC URL (and so any provider API key) in the log file."""
+    import logging
+
+    assert logging.getLogger("web3").level >= logging.WARNING
+    assert logging.getLogger("urllib3").level >= logging.WARNING

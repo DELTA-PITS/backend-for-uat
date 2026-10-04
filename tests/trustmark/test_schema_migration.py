@@ -168,3 +168,17 @@ class TestRehearsalDatabasePin:
         monkeypatch.setattr(main, "engine", create_engine("postgresql+psycopg2://u:p@localhost/trustmark"))
         monkeypatch.delenv("REQUIRE_DATABASE_NAME", raising=False)
         main._check_database_name()
+
+
+def test_schema_module_alone_registers_the_tables():
+    """Regression (found on real PostgreSQL in Phase 2): the CLI imports only trustmark.infra.schema, so
+    the model must be registered by that import - otherwise create_all/check silently see an empty schema."""
+    import subprocess
+    import sys
+
+    code = ("import os; os.environ.setdefault('DATABASE_URL','sqlite://');"
+            "from trustmark.infra import schema; from trustmark.infra.db import Base;"
+            "print(sorted(Base.metadata.tables))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                         env={**__import__("os").environ, "DATABASE_URL": "sqlite://"})
+    assert "registry_records" in out.stdout

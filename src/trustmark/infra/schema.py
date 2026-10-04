@@ -20,6 +20,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from trustmark.infra.db import Base
+from trustmark.registry import models as _models  # noqa: F401  (registers the tables on Base.metadata)
 
 logger = logging.getLogger(__name__)
 

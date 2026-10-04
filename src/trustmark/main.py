@@ -96,6 +96,9 @@ log_config = uvicorn.config.LOGGING_CONFIG
 logging.basicConfig(
     filename=settings.LOG_FILE, level=settings.LOG_LEVEL, format=settings.LOG_FORMAT
 )
+# web3/urllib3 DEBUG records contain the full RPC URL, which carries the API key of keyed providers.
+for _noisy in ("web3", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:

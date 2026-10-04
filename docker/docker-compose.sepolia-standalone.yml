@@ -1,0 +1,52 @@
+# Standalone Sepolia rehearsal stack (Phase 2) - the form actually deployed on the server.
+# Unlike docker-compose.sepolia.yml (overlay), this is its OWN Compose project (`trustmark-sepolia`)
+# that only attaches to the existing `trustmark_default` network to reach Postgres and Keycloak.
+# `up`/`build`/`down` here can therefore never recreate or modify the production project's services
+# (trustmark-app, anvil, postgres, keycloak) - which matters because the server's production compose
+# file has drifted from git.
+#
+# Env file (server only, root 600, never committed): docker/.env.sepolia with
+#   SEPOLIA_RPC_URL, SEPOLIA_PRIVATE_KEY, POSTGRES_USER, POSTGRES_PASSWORD,
+#   KEYCLOAK_ISSUER, KEYCLOAK_ISSUER_URL, KEYCLOAK_AUDIENCE, CORS_ALLOW_ORIGINS, MAX_UPLOAD_BYTES
+# Run from this directory:
+#   docker compose --env-file .env.sepolia -f docker-compose.sepolia-standalone.yml config -q
+#   docker compose --env-file .env.sepolia -f docker-compose.sepolia-standalone.yml up -d --build
+
+name: trustmark-sepolia
+
+services:
+  trustmark-app-sepolia:
+    container_name: trustmark-app-sepolia
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    environment:
+      BASE_DIR: /home/akmi/pits
+      EXPOSE_PORT: 41012
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:?}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/trustmark_sepolia
+      REQUIRE_DATABASE_NAME: trustmark_sepolia
+      SCHEMA_AUTO_APPLY: "false"
+      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL:?}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-account}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-20971520}
+      BLOCKCHAIN_RPC_URL: ${SEPOLIA_RPC_URL:?set SEPOLIA_RPC_URL}
+      BLOCKCHAIN_PRIVATE_KEY: ${SEPOLIA_PRIVATE_KEY:?set SEPOLIA_PRIVATE_KEY}
+      BLOCKCHAIN_CHAIN_ID: "11155111"
+      BLOCKCHAIN_NETWORK_NAME: "Ethereum Sepolia"
+      BLOCKCHAIN_EXPLORER_URL: "https://sepolia.etherscan.io"
+      BLOCKCHAIN_RECEIPT_TIMEOUT_SECONDS: "45"
+      BLOCKCHAIN_CONFIRMATIONS: "1"
+      TEST_MODE: "False"
+    networks:
+      - trustmark_default
+    ports:
+      - "127.0.0.1:41013:41012"
+    restart: unless-stopped
+
+networks:
+  trustmark_default:
+    external: true
